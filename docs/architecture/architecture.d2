@@ -1,0 +1,101 @@
+# lens-review-bot のアーキテクチャ図
+# __MONO__ は単色ロゴの色。render.py がライト用 (000000) とダーク用 (ffffff) に置き換えて 2 枚描く
+# 生成: python ~/.claude/skills/arch-diagram/versions/v1.1/scripts/render.py docs/architecture/architecture.d2
+direction: right
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    pad: 40
+  }
+}
+
+classes: {
+  svc: {
+    shape: rectangle
+    style: {
+      border-radius: 12
+      font-size: 15
+    }
+  }
+  ext: {
+    shape: image
+    width: 64
+    height: 64
+    label.near: outside-bottom-center
+  }
+  zone: {
+    style.border-radius: 16
+  }
+  saas: {
+    style: {
+      border-radius: 16
+      stroke-dash: 3
+    }
+  }
+}
+
+dev: 開発者 {
+  class: ext
+  icon: https://icons.terrastruct.com/essentials%2F005-programmer.svg
+}
+
+target: 対象リポジトリ {
+  class: zone
+  icon: https://cdn.simpleicons.org/github/__MONO__
+
+  pr: "PR\nレビューのコメント" {
+    class: svc
+    icon: https://cdn.simpleicons.org/github/__MONO__
+  }
+  caller: "呼ぶ側の workflow\n.github/workflows/lens-review.yml" {
+    class: svc
+    icon: https://cdn.simpleicons.org/githubactions
+  }
+  config: "設定ファイル (任意)\n.github/lens-review.yml" {
+    class: svc
+    shape: page
+  }
+}
+
+actions: "GitHub Actions (reusable workflow)" {
+  class: zone
+  icon: https://cdn.simpleicons.org/githubactions
+
+  decide: "decide\n回すかと設定を決める" {
+    class: svc
+    icon: https://cdn.simpleicons.org/python
+  }
+  review: "review\nclaude-code-action で lens-review" {
+    class: svc
+    icon: https://cdn.simpleicons.org/anthropic/__MONO__
+  }
+}
+
+external: 外部 {
+  class: saas
+  direction: down
+
+  bot: "lens-review-bot\n判定のスクリプト・既定の設定" {
+    class: ext
+    icon: https://cdn.simpleicons.org/github/__MONO__
+  }
+  plugins: "claude-plugins-official\nlens-review プラグイン" {
+    class: ext
+    icon: https://cdn.simpleicons.org/github/__MONO__
+  }
+  api: "Anthropic API" {
+    class: ext
+    icon: https://cdn.simpleicons.org/anthropic/__MONO__
+  }
+}
+
+dev -> target.pr: "PR を開く・push・/lens-review"
+target.pr -> target.caller: イベント
+target.caller -> actions.decide: workflow_call
+target.config -> actions.decide: 設定
+external.bot -> actions.decide: bot_ref で取得
+actions.decide -> actions.review: 回すときだけ
+external.plugins -> actions.review: 最新の lens-review
+actions.review <-> external.api
+actions.review -> target.pr: "指摘とまとめを書き換えて投稿"
