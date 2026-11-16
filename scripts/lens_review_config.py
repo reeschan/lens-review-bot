@@ -45,7 +45,6 @@ DEFAULT_TOOLS = (
     "Bash(gh pr diff:*)",
     "Bash(gh pr comment:*)",
     "Bash(gh api:*)",
-    "mcp__github_inline_comment__create_inline_comment",
     "Write(//tmp/**)",
     "Write(//home/runner/work/_temp/lens-review-claude/**)",
 )
