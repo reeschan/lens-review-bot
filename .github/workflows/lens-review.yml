@@ -189,7 +189,7 @@ jobs:
       - name: Install the sandbox tools for claude
         run: sudo apt-get update -qq && sudo apt-get install -y -qq socat bubblewrap
 
-      # claude が書ける $RUNNER_TEMP の下はここだけ (claude_args の Write)。runner の制御ファイルや workflow の一時ファイルには届かない。
+      # claude が書ける $RUNNER_TEMP の下はここだけ (claude_args の Edit の規則。Write ツールもこれで許す)。runner の制御ファイルや workflow の一時ファイルには届かない。
       # 書き始めた時刻を、投稿後の確認で前の回のまとめを数えないために控える。
       - name: Prepare the temp folder for claude
         id: prepare

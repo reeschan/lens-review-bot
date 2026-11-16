@@ -60,7 +60,9 @@ class DecideTests(unittest.TestCase):
         for value in ("--model claude-sonnet-5-5", "--max-turns 80",
                       "--permission-mode default", "--setting-sources user"):
             self.assertIn(value, result["claude_args"])
-        self.assertEqual(result["prompt"], "/lens-review:lens-review 12 --comment --min-severity major --post-rule-violations")
+        lines = result["prompt"].splitlines()
+        self.assertEqual(lines[0], "/lens-review:lens-review 12 --comment --min-severity major --post-rule-violations")
+        self.assertIn("Write ツール", lines[-1])
 
     def test_draft_pull_request_skips(self):
         self.assert_skip(self.decide_pr(draft=True), "draft")
@@ -157,7 +159,7 @@ class DecideTests(unittest.TestCase):
     def test_added_tools_follow_defaults(self):
         args = self.decide_pr("allowed_tools: [Bash(python:*)]\n")["claude_args"]
         self.assertIn("Read,Grep,Glob,Agent,Skill", args)
-        self.assertIn("Write(//home/runner/work/_temp/lens-review-claude/**),Bash(python:*)", args)
+        self.assertIn("Edit(//home/runner/work/_temp/lens-review-claude/**),Bash(python:*)", args)
 
     def test_default_tool_is_not_duplicated(self):
         args = self.decide_pr("allowed_tools: [Read]\n")["claude_args"]
@@ -165,9 +167,21 @@ class DecideTests(unittest.TestCase):
 
     def test_default_excludes_execution_and_broad_git(self):
         args = self.decide_pr()["claude_args"]
-        for tool in ("Bash(python:*)", "Bash(npm:*)", "Bash(git:*)", "Bash(git fetch:*)",
-                     "Bash(git diff:*)", "Bash(git show:*)", "Bash(git log:*)"):
+        for tool in ("Bash(python:*)", "Bash(python3:*)", "Bash(npm:*)", "Bash(git:*)"):
             self.assertNotIn(tool, args)
+
+    def test_git_read_forms_are_allowed_with_their_exits_denied(self):
+        args = self.decide_pr()["claude_args"]
+        for tool in ("Bash(git diff:*)", "Bash(git show:*)", "Bash(git log:*)", "Bash(git fetch:*)"):
+            self.assertIn(tool, args)
+        self.assertIn(
+            '--disallowedTools "Bash(git *--output*),Bash(git *--upload-pack*),Bash(git *-c *)"',
+            args,
+        )
+
+    def test_temp_folders_are_added_as_writable_dirs(self):
+        args = self.decide_pr()["claude_args"]
+        self.assertIn("--add-dir /tmp /home/runner/work/_temp/lens-review-claude ", args)
 
     def test_null_scalars_are_config_errors(self):
         for value in ("null", "Null", "NULL", "~"):
@@ -181,8 +195,8 @@ class DecideTests(unittest.TestCase):
 
     def test_default_write_is_limited_to_claude_temp(self):
         args = self.decide_pr()["claude_args"]
-        self.assertNotIn("Write(//home/runner/work/_temp/**)", args)
-        self.assertIn("Write(//home/runner/work/_temp/lens-review-claude/**)", args)
+        self.assertNotIn("Edit(//home/runner/work/_temp/**)", args)
+        self.assertIn("Edit(//home/runner/work/_temp/lens-review-claude/**)", args)
 
     def test_disable_rule_violations(self):
         prompt = self.decide_pr("post_rule_violations: false\n")["prompt"]

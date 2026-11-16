@@ -136,7 +136,7 @@ jobs:
 - **設定は base ブランチの版を読みます**: `.github/lens-review.yml` は PR の base ブランチから API で取得するため、PR 内で設定を変えて許可ツールを増やしたり条件を緩めたりしても、その PR のレビューには効きません。
 - **`.github/lens-review.yml` 以外は PR の head の版が動きます**: 呼ぶ側の workflow 自体（`.github/workflows/lens-review.yml`）や、チェックアウトして読む `CLAUDE.md`・`AGENTS.md`・`rules`・`spec` は PR の head の版が使われます。
 - **コードは既定で実行しません**: テスト・インタプリタ・パッケージマネージャなどは既定の許可ツールに含めておらず、`--permission-mode default` と `--setting-sources user` で実行を制限しています。必要なコマンドのみ `allowed_tools` で明示的に追加できます。
-- **Git の書き出しを制限します**: `--output` で任意のファイルに書ける `git diff`・`git show`・`git log` と、任意のコマンドを実行できる `git fetch` は既定では許可しません。
+- **Git の書き出しとコマンドの実行を塞ぎます**: `git diff`・`git show`・`git log`・`git fetch` は許可しますが、任意のファイルに書ける `--output` と、任意のコマンドを実行できる `--upload-pack`・`-c` を含む呼び出しは `--disallowedTools` で拒否します。
 - **public リポジトリではログが公開されます**: GitHub Actions の実行ログには `lens-review` の端末向け出力（PR に出さなかった `minor` や要確認項目を含む）が出力される点に注意してください。
 
 ---

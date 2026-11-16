@@ -41,12 +41,43 @@ DEFAULT_TOOLS = (
     "Bash(git rev-parse:*)",
     "Bash(git merge-base:*)",
     "Bash(git blame:*)",
+    "Bash(git diff:*)",
+    "Bash(git log:*)",
+    "Bash(git show:*)",
+    "Bash(git fetch:*)",
+    "Bash(git branch:*)",
+    "Bash(cd:*)",
+    "Bash(ls:*)",
+    "Bash(head:*)",
+    "Bash(tail:*)",
+    "Bash(wc:*)",
     "Bash(gh pr view:*)",
     "Bash(gh pr diff:*)",
     "Bash(gh pr comment:*)",
     "Bash(gh api:*)",
-    "Write(//tmp/**)",
-    "Write(//home/runner/work/_temp/lens-review-claude/**)",
+    "Edit(//tmp/**)",
+    "Edit(//home/runner/work/_temp/lens-review-claude/**)",
+)
+
+# 許した git の読む形から、ファイルを書く (--output) か、コマンドを動かす (--upload-pack・-c) 出口だけを塞ぐ。
+DENIED_TOOLS = (
+    "Bash(git *--output*)",
+    "Bash(git *--upload-pack*)",
+    "Bash(git *-c *)",
+)
+
+# bot の中で lens-review に伝える環境の決まり。許していない操作 (スクリプトの実行やヒアドキュメントでのファイル作成) を
+# 試して拒まれ、投稿まで進めずに終わらないようにする。
+ENVIRONMENT_NOTE = (
+    "この環境の Bash は、許された操作 (git の読む形・gh・cd・ls・head・tail・wc など) だけが使える。"
+    "スクリプトの実行やヒアドキュメントでのファイル作成は試さない。"
+    "review.json・summary.json は Write ツールで /tmp/lens-review/ の下に書き、gh api --input で投稿する。"
+)
+
+# Write を許す一時フォルダ。作業フォルダの外なので、--add-dir で書ける場所に足す。
+WRITABLE_DIRS = (
+    "/tmp",
+    "/home/runner/work/_temp/lens-review-claude",
 )
 
 OUTPUT_KEYS = (
@@ -442,12 +473,16 @@ def _build_claude_args(cfg: dict) -> str:
             tools.append(tool)
             seen.add(tool)
     joined_tools = ",".join(tools)
+    joined_denied = ",".join(DENIED_TOOLS)
+    dirs = " ".join(WRITABLE_DIRS)
     return (
         f"--model {cfg['model']} "
         f"--max-turns {cfg['max_turns']} "
         "--permission-mode default "
         "--setting-sources user "
-        f'--allowedTools "{joined_tools}"'
+        f"--add-dir {dirs} "
+        f'--allowedTools "{joined_tools}" '
+        f'--disallowedTools "{joined_denied}"'
     )
 
 
@@ -465,11 +500,12 @@ def _build_prompt(pr_number: int | None, cfg: dict) -> str:
         parts.extend(["--rules", rule])
     if "spec" in cfg and cfg["spec"] is not None:
         parts.extend(["--spec", cfg["spec"]])
-    first_line = " ".join(parts)
+    lines = [" ".join(parts)]
     exclude = cfg.get("exclude", [])
     if exclude:
-        return f"{first_line}\n次のパス (glob) に当たるファイルは対象から除く: {', '.join(exclude)}"
-    return first_line
+        lines.append(f"次のパス (glob) に当たるファイルは対象から除く: {', '.join(exclude)}")
+    lines.append(ENVIRONMENT_NOTE)
+    return "\n".join(lines)
 
 
 def _make_result(

@@ -81,7 +81,7 @@ bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workfl
 
 - 入力: PR のイベント (種類・draft か・head と base のリポジトリ・コメントの本文・コメントした人の権限) と、base の版の設定ファイルの中身 (無ければ無し)。
 - 出力: 「回す」か「飛ばす (理由)」か「設定の誤り (理由)」のどれか。回すときは、claude-code-action に渡す `claude_args` と `prompt`。
-- `claude_args` には `--model`・`--max-turns`・`--permission-mode default`・`--allowedTools` を入れる。許す操作の既定は、読む道具 (Read・Grep・Glob)、サブエージェント (Agent)、`git`、`gh pr view`・`gh pr diff`・`gh pr comment`・`gh api`、インラインコメントの道具、一時フォルダへの書き込み。リポジトリのコードの実行 (テスト・インタプリタ・パッケージマネージャ) は既定に入れず、設定の `allowed_tools` でだけ足せる。claude-code-action の既定の許可の仕方 (auto) では広い許可が無視されるので、`--permission-mode default` にして列挙を厳密に効かせる。
+- `claude_args` には `--model`・`--max-turns`・`--permission-mode default`・`--allowedTools` を入れる。許す操作の既定は、読む道具 (Read・Grep・Glob)、サブエージェント (Agent)、`git` の読む形 (`status`・`rev-parse`・`merge-base`・`blame`・`diff`・`log`・`show`・`fetch`・`branch`)、`cd`・`ls`・`head`・`tail`・`wc`、`gh pr view`・`gh pr diff`・`gh pr comment`・`gh api`、一時フォルダへの書き込み (`--add-dir` で書ける場所に足す)。`git` の読む形のうち、ファイルを書く `--output` と、コマンドを動かす `--upload-pack`・`-c` は `--disallowedTools` で塞ぐ (lens-review は diff・log・show・fetch を使うので、形ごと外すと投稿まで進めない)。リポジトリのコードの実行 (テスト・インタプリタ・パッケージマネージャ) は既定に入れず、設定の `allowed_tools` でだけ足せる。claude-code-action の既定の許可の仕方 (auto) では広い許可が無視されるので、`--permission-mode default` にして列挙を厳密に効かせる。
 - `prompt` は lens-review を呼ぶ指示: `/lens-review:lens-review <PR 番号> --comment --min-severity <値> [--post-rule-violations] [--rules <パス>]... [--spec <パス>]`。`exclude` は、対象のパスから除く指示として渡す。
 - スクリプトは外部に依存しない (標準ライブラリだけ) 小さなものにし、reusable workflow から呼ぶ。
 
