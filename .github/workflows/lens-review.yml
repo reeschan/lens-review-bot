@@ -1,0 +1,276 @@
+name: lens-review
+
+on:
+  workflow_call:
+    inputs:
+      bot_ref:
+        description: reeschan/lens-review-bot の ref (スクリプトと既定の設定の版)
+        type: string
+        required: false
+        default: main
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  decide:
+    # 関係の無いコメントは job ごと飛ばす。厳密な判定 (前の空白・権限・fork など) はスクリプトがする。
+    if: github.event_name == 'pull_request' || (github.event.issue.pull_request && contains(github.event.comment.body, '/lens-review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      decision: ${{ steps.decide.outputs.decision }}
+      pr_number: ${{ steps.decide.outputs.pr_number }}
+      head_sha: ${{ steps.decide.outputs.head_sha }}
+      claude_args: ${{ steps.decide.outputs.claude_args }}
+      prompt: ${{ steps.decide.outputs.prompt }}
+    steps:
+      - name: Check out lens-review-bot
+        uses: actions/checkout@v4
+        with:
+          repository: reeschan/lens-review-bot
+          ref: ${{ inputs.bot_ref }}
+          path: .lens-review-bot
+          persist-credentials: false
+
+      - name: Fetch the PR, the permission and the config of the base
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          dir="$RUNNER_TEMP/lens-review"
+          mkdir -p "$dir"
+          err="$dir/gh-error.txt"
+          args=()
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            gh api "repos/$REPO/pulls/$ISSUE_NUMBER" > "$dir/pr.json"
+            args+=(--pr "$dir/pr.json")
+            if permission=$(gh api "repos/$REPO/collaborators/$COMMENTER/permission" --jq .permission 2> "$err"); then
+              :
+            elif grep -q "HTTP 404" "$err"; then
+              permission=none
+            else
+              cat "$err" >&2
+              exit 1
+            fi
+            args+=(--permission "$permission")
+            base_sha=$(jq -r '.base.sha' "$dir/pr.json")
+          else
+            base_sha="$PR_BASE_SHA"
+          fi
+          # 設定は base の版を API で読む。取れたときだけファイルに書き、404 は「無し」。
+          config="$dir/config.yml"
+          if gh api -H "Accept: application/vnd.github.raw" \
+              "repos/$REPO/contents/.github/lens-review.yml?ref=$base_sha" > "$dir/config.tmp" 2> "$err"; then
+            mv "$dir/config.tmp" "$config"
+          elif grep -q "HTTP 404" "$err"; then
+            rm -f "$dir/config.tmp"
+          else
+            cat "$err" >&2
+            exit 1
+          fi
+          args+=(--config "$config")
+          printf '%s\n' "${args[@]}" > "$dir/args.txt"
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          mapfile -t args < "$RUNNER_TEMP/lens-review/args.txt"
+          python3 .lens-review-bot/scripts/lens_review_config.py decide \
+            --event-name "$EVENT_NAME" \
+            --event "$GITHUB_EVENT_PATH" \
+            "${args[@]}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Report the config error
+        id: config-error
+        if: steps.decide.outputs.decision == 'config-error'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
+          BODY: ${{ steps.decide.outputs.summary_body }}
+        run: |
+          body_file="$RUNNER_TEMP/lens-review/summary.md"
+          printf '%s\n' "$BODY" > "$body_file"
+          ids=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review")) | .id')
+          id=$(printf '%s\n' "$ids" | sed -n 1p)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body_file" > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$body_file"
+          fi
+          echo "::error::.github/lens-review.yml (base) を読めなかったため、レビューしていない。"
+          exit 1
+
+      - name: Report the failure
+        if: failure() && !cancelled() && steps.decide.outputs.decision != 'config-error' && (steps.decide.outputs.pr_number || github.event.pull_request.number || github.event.issue.number)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.decide.outputs.pr_number || github.event.pull_request.number || github.event.issue.number }}
+          HEAD_SHA: ${{ steps.decide.outputs.head_sha || github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lens-review"
+          body_file="$RUNNER_TEMP/lens-review/failure.md"
+          script=.lens-review-bot/scripts/lens_review_config.py
+          head_args=()
+          if [ -n "$HEAD_SHA" ]; then
+            head_args=(--head-sha "$HEAD_SHA")
+          fi
+          if [ -f "$script" ] \
+              && python3 "$script" failure-body \
+                --stage decide --run-url "$RUN_URL" "${head_args[@]}" > "$body_file"; then
+            :
+          else
+            # bot の取得に失敗してスクリプトが無いときは、failure-body と同じ形の本文を shell で組む。
+            printf '## lens-review\nレビューできなかった。失敗した段: %s\nログ: %s\n' \
+              decide "$RUN_URL" > "$body_file"
+            if [ -n "$HEAD_SHA" ]; then
+              printf '対象の head: %s\n' "${HEAD_SHA:0:7}" >> "$body_file"
+            fi
+          fi
+          ids=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review")) | .id')
+          id=$(printf '%s\n' "$ids" | sed -n 1p)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body_file" > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$body_file"
+          fi
+
+  review:
+    needs: decide
+    if: needs.decide.outputs.decision == 'run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 同じ PR のレビューは 1 つにまとめ、新しい方が古い方を止める。飛ばすイベントは decide で止まるのでここに入らない。
+    concurrency:
+      group: lens-review-${{ github.repository }}-${{ needs.decide.outputs.pr_number }}
+      cancel-in-progress: true
+    steps:
+      - name: Check that the head is still the latest
+        id: stale-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.decide.outputs.head_sha }}
+        run: |
+          current=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)
+          if [ "$current" != "$HEAD_SHA" ]; then
+            echo "The head moved from $HEAD_SHA to $current; reviewing the current head."
+          fi
+          echo "head_sha=$current" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the PR head
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.stale-check.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # claude が書ける $RUNNER_TEMP の下はここだけ (claude_args の Write)。runner の制御ファイルや workflow の一時ファイルには届かない。
+      - name: Prepare the temp folder for claude
+        run: mkdir -p "$RUNNER_TEMP/lens-review-claude"
+
+      - name: Run lens-review
+        id: claude
+        # job の時間切れでは後片付けが回らないので、この step を先に時間切れにして失敗として扱う。
+        timeout-minutes: 25
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          plugin_marketplaces: https://github.com/reeschan/claude-plugins-official.git
+          plugins: lens-review@reeschan-plugins
+          prompt: ${{ needs.decide.outputs.prompt }}
+          claude_args: ${{ needs.decide.outputs.claude_args }}
+
+      # claude の step は、投稿の gh api が失敗しても成功で終わることがある。まとめにレビューした head の SHA があるかで確かめ、無ければ失敗にする。
+      - name: Check that the summary was posted
+        id: post-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.stale-check.outputs.head_sha }}
+        run: |
+          found=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            | jq -r --arg sha "$HEAD_SHA" \
+              '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review") and ((.body // "") | contains($sha))) | .id' \
+            | sed -n 1p)
+          if [ -z "$found" ]; then
+            echo "::error::まとめのコメントに、レビューした head ($HEAD_SHA) の SHA が無い。投稿が失敗した。"
+            exit 1
+          fi
+
+      # 後片付けが動かすスクリプトは、claude の実行の後に workspace の下の新しいパスへ取り直す。
+      - name: Clear the path for a fresh lens-review-bot
+        if: failure() && !cancelled()
+        run: rm -rf "$GITHUB_WORKSPACE/.lens-review-bot-report"
+
+      - name: Check out lens-review-bot again for the report
+        id: report-bot
+        if: failure() && !cancelled()
+        # 取れなくても後片付けは shell で組んだ本文で続ける。
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: reeschan/lens-review-bot
+          ref: ${{ inputs.bot_ref }}
+          path: .lens-review-bot-report
+          persist-credentials: false
+
+      - name: Report the failure
+        if: failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.stale-check.outputs.head_sha || needs.decide.outputs.head_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPORT_BOT: ${{ steps.report-bot.outcome }}
+          STAGE: >-
+            ${{
+              (steps.stale-check.outcome == 'failure' && 'stale-check')
+              || (steps.checkout.outcome == 'failure' && 'checkout')
+              || (steps.post-check.outcome == 'failure' && 'post')
+              || 'claude'
+            }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/lens-review"
+          body_file="$RUNNER_TEMP/lens-review/failure.md"
+          script="$GITHUB_WORKSPACE/.lens-review-bot-report/scripts/lens_review_config.py"
+          if [ "$REPORT_BOT" = "success" ] && [ -f "$script" ] \
+              && python3 "$script" failure-body \
+                --stage "$STAGE" --run-url "$RUN_URL" --head-sha "$HEAD_SHA" > "$body_file"; then
+            :
+          else
+            # bot の取得に失敗したときは、failure-body と同じ形の本文を shell で組む。
+            printf '## lens-review\nレビューできなかった。失敗した段: %s\nログ: %s\n対象の head: %s\n' \
+              "$STAGE" "$RUN_URL" "${HEAD_SHA:0:7}" > "$body_file"
+          fi
+          ids=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review")) | .id')
+          id=$(printf '%s\n' "$ids" | sed -n 1p)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body_file" > /dev/null
+          else
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$body_file"
+          fi

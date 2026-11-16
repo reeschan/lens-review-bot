@@ -1,0 +1,23 @@
+# 対象リポジトリの .github/workflows/lens-review.yml に置く例
+name: lens-review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+# 呼ぶ側の permissions は省けない (reusable workflow に渡される権限の上限になる)
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  lens-review:
+    uses: reeschan/lens-review-bot/.github/workflows/lens-review.yml@main
+    # workflow を @<tag> で固定する場合は bot_ref にも同じ値を渡す
+    # with:
+    #   bot_ref: v0.1.0
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
