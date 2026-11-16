@@ -186,14 +186,21 @@ jobs:
           persist-credentials: false
 
       # claude が書ける $RUNNER_TEMP の下はここだけ (claude_args の Write)。runner の制御ファイルや workflow の一時ファイルには届かない。
+      # 書き始めた時刻を、投稿後の確認で前の回のまとめを数えないために控える。
       - name: Prepare the temp folder for claude
-        run: mkdir -p "$RUNNER_TEMP/lens-review-claude"
+        id: prepare
+        run: |
+          mkdir -p "$RUNNER_TEMP/lens-review-claude"
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Run lens-review
         id: claude
         # job の時間切れでは後片付けが回らないので、この step を先に時間切れにして失敗として扱う。
         timeout-minutes: 25
         uses: anthropics/claude-code-action@v1
+        # Bash の子プロセスから API キーを消す。PR の中身に仕込まれた指示で、gh api からキーを書き出させないため。GH_TOKEN・GITHUB_TOKEN は残る。
+        env:
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ github.token }}
@@ -202,7 +209,7 @@ jobs:
           prompt: ${{ needs.decide.outputs.prompt }}
           claude_args: ${{ needs.decide.outputs.claude_args }}
 
-      # claude の step は、投稿の gh api が失敗しても成功で終わることがある。まとめにレビューした head の SHA があるかで確かめ、無ければ失敗にする。
+      # claude の step は、投稿の gh api が失敗しても成功で終わることがある。この回に書かれたまとめに、レビューした head の完全な SHA があるかで確かめ、無ければ失敗にする。
       - name: Check that the summary was posted
         id: post-check
         env:
@@ -210,10 +217,12 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
           HEAD_SHA: ${{ steps.stale-check.outputs.head_sha }}
+          STARTED_AT: ${{ steps.prepare.outputs.started_at }}
         run: |
+          # updated_at と STARTED_AT はどちらも UTC の YYYY-MM-DDTHH:MM:SSZ なので、文字列の比較で前後が分かる。
           found=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            | jq -r --arg sha "$HEAD_SHA" \
-              '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review") and ((.body // "") | contains($sha))) | .id' \
+            | jq -r --arg sha "$HEAD_SHA" --arg since "$STARTED_AT" \
+              '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review") and ((.body // "") | contains($sha)) and (.updated_at >= $since)) | .id' \
             | sed -n 1p)
           if [ -z "$found" ]; then
             echo "::error::まとめのコメントに、レビューした head ($HEAD_SHA) の SHA が無い。投稿が失敗した。"
