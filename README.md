@@ -5,6 +5,13 @@ GitHub Actions 上で [lens-review](https://github.com/reeschan/claude-plugins-o
 - PR を開いたとき・draft を外したとき・push したとき・`/lens-review` とコメントしたときに起動し、`reeschan/claude-plugins-official` の既定ブランチにある最新の `lens-review` でレビューします。
 - PR への投稿は重複を避け、まとめのコメントを 1 つに保って書き換えます。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/architecture-dark.svg">
+  <img src="docs/architecture/architecture-light.svg" alt="lens-review-bot のアーキテクチャ図。対象リポジトリの PR のイベントで呼ぶ側の workflow が reusable workflow を呼び、decide が回すかと設定を決め、review が claude-code-action で最新の lens-review を回して PR に指摘とまとめを投稿する">
+</picture>
+
+図のソースは [`docs/architecture/architecture.d2`](docs/architecture/architecture.d2) です。構成が変わったら、ソースを直して arch-diagram で描き直してください。
+
 > [!IMPORTANT]
 > `reeschan/claude-plugins-official` の既定ブランチに **lens-review 0.3.0 以上** が入ってから利用してください（0.2 系では 2 回目以降にコメントが投稿されません）。
 
