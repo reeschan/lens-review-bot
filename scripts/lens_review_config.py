@@ -9,13 +9,12 @@ from pathlib import Path
 
 ALLOWED_KEYS = frozenset({
     "model",
-    "max_turns",
+    "max_output_tokens",
     "min_severity",
     "post_rule_violations",
     "rules",
     "spec",
     "exclude",
-    "allowed_tools",
 })
 
 ALLOWED_PR_ACTIONS = frozenset({"opened", "reopened", "ready_for_review", "synchronize"})
@@ -29,25 +28,7 @@ INT_RE = re.compile(r"^[+-]?\d+$")
 
 FORBIDDEN_PATH_CHARS = frozenset({"'", '"', "`", "$", "\\"})
 FORBIDDEN_EXCLUDE_CHARS = frozenset({"'", '"', "`", "$", "\\", "\n", "\r"})
-FORBIDDEN_TOOL_CHARS = frozenset({",", "'", '"', "`", "$", "\\", "\n", "\r"})
-
-DEFAULT_TOOLS = (
-    "Read",
-    "Grep",
-    "Glob",
-    "Agent",
-    "Skill",
-    "Bash(git status:*)",
-    "Bash(git rev-parse:*)",
-    "Bash(git merge-base:*)",
-    "Bash(git blame:*)",
-    "Bash(gh pr view:*)",
-    "Bash(gh pr diff:*)",
-    "Bash(gh pr comment:*)",
-    "Bash(gh api:*)",
-    "Write(//tmp/**)",
-    "Write(//home/runner/work/_temp/lens-review-claude/**)",
-)
+MAX_OUTPUT_TOKENS_LIMIT = 64000
 
 OUTPUT_KEYS = (
     "decision",
@@ -55,8 +36,7 @@ OUTPUT_KEYS = (
     "pr_number",
     "head_sha",
     "base_sha",
-    "claude_args",
-    "prompt",
+    "config",
     "summary_body",
 )
 
@@ -318,9 +298,12 @@ def _validate_config(cfg: dict) -> None:
         if key == "model":
             if not isinstance(val, str) or not MODEL_RE.fullmatch(val):
                 raise ConfigError("'model' の形式が不正です")
-        elif key == "max_turns":
-            if not isinstance(val, int) or isinstance(val, bool) or not (1 <= val <= 500):
-                raise ConfigError("'max_turns' は 1 以上 500 以下の整数でなければなりません")
+        elif key == "max_output_tokens":
+            if (not isinstance(val, int) or isinstance(val, bool)
+                    or not (1 <= val <= MAX_OUTPUT_TOKENS_LIMIT)):
+                raise ConfigError(
+                    f"'max_output_tokens' は 1 以上 {MAX_OUTPUT_TOKENS_LIMIT} 以下の整数でなければなりません"
+                )
         elif key == "min_severity":
             if not isinstance(val, str) or val not in ALLOWED_SEVERITIES:
                 raise ConfigError("'min_severity' は critical・major・minor のいずれかでなければなりません")
@@ -336,12 +319,6 @@ def _validate_config(cfg: dict) -> None:
             _validate_str_list(
                 key, val,
                 lambda s: bool(s) and not any(c in FORBIDDEN_EXCLUDE_CHARS for c in s),
-                "空でない文字列で禁止文字を含まない必要があります",
-            )
-        elif key == "allowed_tools":
-            _validate_str_list(
-                key, val,
-                lambda s: bool(s) and not any(c in FORBIDDEN_TOOL_CHARS for c in s),
                 "空でない文字列で禁止文字を含まない必要があります",
             )
 
@@ -434,51 +411,12 @@ def _load_merged_config(config_text: str | None, defaults_text: str | None) -> d
     return merged
 
 
-def _build_claude_args(cfg: dict) -> str:
-    tools = list(DEFAULT_TOOLS)
-    seen = set(tools)
-    for tool in cfg.get("allowed_tools", []):
-        if tool not in seen:
-            tools.append(tool)
-            seen.add(tool)
-    joined_tools = ",".join(tools)
-    return (
-        f"--model {cfg['model']} "
-        f"--max-turns {cfg['max_turns']} "
-        "--permission-mode default "
-        "--setting-sources user "
-        f'--allowedTools "{joined_tools}"'
-    )
-
-
-def _build_prompt(pr_number: int | None, cfg: dict) -> str:
-    parts = [
-        "/lens-review:lens-review",
-        str(pr_number),
-        "--comment",
-        "--min-severity",
-        cfg["min_severity"],
-    ]
-    if cfg["post_rule_violations"]:
-        parts.append("--post-rule-violations")
-    for rule in cfg.get("rules", []):
-        parts.extend(["--rules", rule])
-    if "spec" in cfg and cfg["spec"] is not None:
-        parts.extend(["--spec", cfg["spec"]])
-    first_line = " ".join(parts)
-    exclude = cfg.get("exclude", [])
-    if exclude:
-        return f"{first_line}\n次のパス (glob) に当たるファイルは対象から除く: {', '.join(exclude)}"
-    return first_line
-
-
 def _make_result(
     decision: str,
     meta: tuple[int | None, str | None, str | None],
     *,
     reason: str | None = None,
-    claude_args: str | None = None,
-    prompt: str | None = None,
+    config: str | None = None,
     summary_body: str | None = None,
 ) -> dict:
     pr_number, head_sha, base_sha = meta
@@ -488,8 +426,7 @@ def _make_result(
         "pr_number": pr_number,
         "head_sha": head_sha,
         "base_sha": base_sha,
-        "claude_args": claude_args,
-        "prompt": prompt,
+        "config": config,
         "summary_body": summary_body,
     }
 
@@ -535,12 +472,11 @@ def decide(
     return _make_result(
         "run",
         meta,
-        claude_args=_build_claude_args(cfg),
-        prompt=_build_prompt(meta[0], cfg),
+        config=json.dumps(cfg, ensure_ascii=False, sort_keys=True),
     )
 
 
-def failure_body(stage: str, run_url: str, head_sha: str | None) -> str:
+def failure_body(stage: str, run_url: str, head_sha: str | None, reason: str | None = None) -> str:
     """Format the summary comment body when a review run fails."""
     lines = [
         "## lens-review",
@@ -548,7 +484,9 @@ def failure_body(stage: str, run_url: str, head_sha: str | None) -> str:
         f"ログ: {run_url}",
     ]
     if head_sha:
-        lines.append(f"対象の head: {head_sha[:7]}")
+        lines.append(f"対象の head: {head_sha}")
+    if reason:
+        lines.append(f"理由: {reason}")
     return "\n".join(lines)
 
 
@@ -630,6 +568,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fail.add_argument("--stage", required=True)
     p_fail.add_argument("--run-url", required=True)
     p_fail.add_argument("--head-sha", default=None)
+    p_fail.add_argument("--reason", default=None)
     return parser
 
 
@@ -638,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "decide":
         return _cmd_decide(args)
     if args.command == "failure-body":
-        print(failure_body(args.stage, args.run_url, args.head_sha))
+        print(failure_body(args.stage, args.run_url, args.head_sha, args.reason))
         return 0
     return 2
 

@@ -5,8 +5,8 @@
 # レビューに使うモデル (空でない文字列、空白不可)
 model: claude-sonnet-5-5
 
-# Claude の最大ターン数 (1 以上 500 以下の整数)
-max_turns: 80
+# モデルの出力の上限 (1 以上 64000 以下の整数)。大きな PR で指摘が切れるときに上げる
+max_output_tokens: 16000
 
 # PR に出す重大度の下限 (critical / major / minor)
 min_severity: major
@@ -28,8 +28,3 @@ exclude: []
 # exclude:
 #   - "*.lock"
 #   - dist/**
-
-# 既定で許す操作に追加するツール (既定ではコードやテストを実行しない)
-allowed_tools: []
-# allowed_tools:
-#   - "Bash(python -m unittest:*)"
