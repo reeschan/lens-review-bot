@@ -10,8 +10,10 @@ The stages run in this order:
 3. diff range: a finding whose `line` is not in the new side of the diff goes to
    "outside the diff" (listed in the summary) instead of being posted inline.
 4. lower bound: a finding lighter than `min_severity` is not shown; only counted.
-   When `post_rule_violations` is true, a `rule_violation` finding is shown
-   regardless of the lower bound.
+   When `post_rule_violations` is true, a `rule_violation` finding whose
+   `rule_source` is one of the rule files in the bundle is shown regardless of
+   the lower bound; any other `rule_source` (a spec, an ADR, an unknown path)
+   follows the lower bound.
 5. same finding: a finding that matches a marker of an existing inline finding
    is not posted and goes to "posted before". A marker with a hash matches on
    file, lens and hash, so a reworded heading still matches; an old marker
@@ -215,10 +217,17 @@ def _hunk_new_lines(hunk: list) -> set:
 # Stage 4: lower bound
 
 
-def is_shown(finding: Finding, min_severity: str, post_rule_violations: bool) -> bool:
-    if post_rule_violations and finding.rule_violation:
+def is_shown(
+    finding: Finding, min_severity: str, post_rule_violations: bool, rule_files: frozenset
+) -> bool:
+    if post_rule_violations and finding.rule_violation and _rule_path(finding) in rule_files:
         return True
     return SEVERITY_RANK[finding.severity] >= SEVERITY_RANK[min_severity]
+
+
+def _rule_path(finding: Finding) -> str:
+    path = finding.rule_source.strip()
+    return path[2:] if path.startswith("./") else path
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +283,7 @@ def triage(
     diff_text: str,
     config: dict,
     inline_comment_bodies: Iterable[str] = (),
+    rule_files: Iterable[str] = (),
 ) -> TriageResult:
     """Sort the model's findings.
 
@@ -281,6 +291,7 @@ def triage(
     `Bundle.file_lines`. `diff_text` is the PR's unified diff. `config` supplies
     `min_severity` (default "minor") and `post_rule_violations` (default False).
     `inline_comment_bodies` are the bodies of the bot's existing inline comments.
+    `rule_files` is `Bundle.rule_files`, the rule files the model was given.
     """
     min_severity = config.get("min_severity") or "minor"
     if min_severity not in SEVERITY_RANK:
@@ -288,6 +299,7 @@ def triage(
     post_rule_violations = bool(config.get("post_rule_violations"))
     ranges = new_side_lines(diff_text)
     markers = read_markers(inline_comment_bodies)
+    known_rules = frozenset(rule_files)
 
     result = TriageResult()
     seen: set = set()
@@ -300,7 +312,7 @@ def triage(
             result.quote_dropped_count += 1
             continue
         in_diff = finding.line in ranges.get(finding.file, ())
-        if not is_shown(finding, min_severity, post_rule_violations):
+        if not is_shown(finding, min_severity, post_rule_violations, known_rules):
             result.below_min.append(finding)
             continue
         if matches_marker(finding, markers):

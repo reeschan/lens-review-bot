@@ -16,7 +16,7 @@
 - `body`: 本文。起きる条件と、直し方を書く。
 - `quote`: 根拠の引用。拠りどころにする行。
 - `rule_violation`: 規約に反する指摘なら `true`、そうでなければ `false`。
-- `rule_source`: `rule_violation` が `true` のとき、反した規約のパス。そうでなければ空。
+- `rule_source`: `rule_violation` が `true` のとき、反した規約のパス。束ねの規約に書かれたパスをそのまま写す。そうでなければ空。仕様・ADR との食い違いは規約違反にしない。
 
 ## 重大度
 

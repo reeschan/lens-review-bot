@@ -114,6 +114,7 @@ class Bundle:
     missing: list[str] = field(default_factory=list)
     file_lines: dict[str, list[str]] = field(default_factory=dict)
     over_limit: bool = False
+    rule_files: list[str] = field(default_factory=list)
 
     @property
     def size(self) -> int:
@@ -481,11 +482,13 @@ def build_bundle(
 
     missing: list[str] = []
     rules: list[str] = []
+    rule_files: list[str] = []
     configured_rules = list(config.get("rules") or [])
     for path in _rule_paths([f.path for f in changed], configured_rules):
         text = _read_inside(root, path)
         if text is not None:
             rules.append(_doc("rule", path, text))
+            rule_files.append(path)
         elif path in configured_rules:
             missing.append(path)
 
@@ -522,4 +525,5 @@ def build_bundle(
         missing=missing,
         file_lines=file_lines,
         over_limit=over_limit,
+        rule_files=rule_files,
     )

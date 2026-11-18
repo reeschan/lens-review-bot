@@ -113,6 +113,9 @@ class ContentsTests(BundleTestCase):
         self.assertEqual(result.text.count("- src/app/main.py: Fix the loop"), 1)
         self.assertEqual((result.trimmed, result.excluded, result.missing, result.over_limit),
                          ([], [], [], False))
+        self.assertEqual(sorted(result.rule_files),
+                         ["AGENTS.md", "CLAUDE.md", "docs/rule.md",
+                          "src/app/AGENTS.md", "src/app/CLAUDE.md"])
         self.assertEqual(result.file_lines["src/app/main.py"],
                          ["first", "second", "third", "old", "second"])
         self.assertLessEqual(result.size, bundle.BUNDLE_CHAR_LIMIT)

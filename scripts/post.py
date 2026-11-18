@@ -78,6 +78,12 @@ def _fence(text: str) -> str:
 def inline_body(finding: Finding) -> str:
     """Marker -> **[severity] heading** -> body -> quote of the evidence."""
     parts = [marker(finding), f"**[{finding.severity}] {finding.heading}**"]
+    return "\n\n".join(parts + _detail_parts(finding))
+
+
+def _detail_parts(finding: Finding) -> list[str]:
+    """Body -> rule source (for a rule violation) -> quote of the evidence."""
+    parts = []
     if finding.body.strip():
         parts.append(finding.body.strip())
     if finding.rule_violation and finding.rule_source.strip():
@@ -85,7 +91,7 @@ def inline_body(finding: Finding) -> str:
     quote = finding.quote.strip("\n")
     fence = _fence(quote)
     parts.append(f"根拠:\n{fence}\n{quote}\n{fence}")
-    return "\n\n".join(parts)
+    return parts
 
 
 def review_payload(head_sha: str, findings: list[Finding]) -> dict | None:
@@ -115,8 +121,18 @@ def _item(finding: Finding) -> str:
 
 
 def _linked_item(finding: Finding, repo: str, head_sha: str) -> str:
+    """A linked list item whose body, rule source and quote fold under <details>.
+
+    These findings are not posted inline, so the summary is the only place that
+    carries their content.
+    """
     link = file_link(repo, head_sha, finding.file, finding.line)
-    return f"- [{finding.severity}] [{finding.file}:{finding.line}]({link}) — {finding.heading}"
+    title = f"- [{finding.severity}] [{finding.file}:{finding.line}]({link}) — {finding.heading}"
+    details = "\n\n".join(
+        ["<details>\n<summary>本文と根拠</summary>", *_detail_parts(finding), "</details>"]
+    )
+    indented = "\n".join(f"  {line}" if line else "" for line in details.splitlines())
+    return f"{title}\n\n{indented}"
 
 
 def _block(title: str, lines: list[str]) -> list[str]:
