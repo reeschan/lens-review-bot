@@ -1,7 +1,6 @@
 model: claude-sonnet-5-5
-max_turns: 80
+max_output_tokens: 16000
 min_severity: major
 post_rule_violations: true
 rules: []
 exclude: []
-allowed_tools: []
