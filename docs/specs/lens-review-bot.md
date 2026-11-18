@@ -8,7 +8,7 @@ lens-review は、裏を取った指摘だけを日本語で出すレビュー�
 
 GitHub Actions で lens-review を動かす bot を作る。PR を開いたとき、draft を外したとき、push のたび、`/lens-review` とコメントしたときに起動し、`reeschan/claude-plugins-official` の既定ブランチの最新の lens-review で PR をレビューする。PR に出すのは critical・major の指摘と、そのリポジトリの規約に反する指摘だけ。コメントの重なりを避け、まとめのコメントは 1 つを書き換える。モデル・ターン数・出す重大度の下限・追加の規約・見ないパス・許す操作は、リポジトリごとの設定ファイルで変えられる。
 
-bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workflow として置き、使うリポジトリには数行の workflow と設定ファイルだけを置く。自分のリポジトリでも、試しに入れる forgers のリポジトリでも、同じ形で使う。
+bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workflow として置き、使うリポジトリには数行の workflow と設定ファイルだけを置く。自分のリポジトリでも、試しに入れる仕事の組織のリポジトリでも、同じ形で使う。
 
 ## User Stories
 
@@ -48,7 +48,7 @@ bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workfl
 **構成**
 
 - 新しい public のリポジトリ `reeschan/lens-review-bot` を作る。中身は reusable workflow、設定を読むスクリプト、既定の設定、README、仕様。秘密は入れない。private の reusable workflow は別のアカウントや組織からは呼べないので、public にする。
-- 使うリポジトリには、reusable workflow を呼ぶ workflow (数行) と、任意の設定ファイル `.github/lens-review.yml` を置く。secret `ANTHROPIC_API_KEY` は使うリポジトリごとに入れる (個人アカウントには組織の secret が無い)。reeschan のリポジトリは持ち主のキー、forgers のリポジトリは会社が出すキー。
+- 使うリポジトリには、reusable workflow を呼ぶ workflow (数行) と、任意の設定ファイル `.github/lens-review.yml` を置く。secret `ANTHROPIC_API_KEY` は使うリポジトリごとに入れる (個人アカウントには組織の secret が無い)。reeschan のリポジトリは持ち主のキー、仕事の組織のリポジトリは会社が出すキー。
 - 実行は `anthropics/claude-code-action@v1`。認証は `anthropic_api_key`。lens-review は `plugin_marketplaces` に `https://github.com/reeschan/claude-plugins-official.git`、`plugins` に `lens-review@reeschan-plugins` を渡して、毎回入れる。版は固定しない (既定ブランチ `reeschan` の最新)。
 - コメントは workflow の `GITHUB_TOKEN` で付ける (`github-actions[bot]` の名前)。claude-code-action の `github_token` に渡す。`lens-review[bot]` の名前にしたくなったら、自分の GitHub App に移す (今回はしない)。
 
@@ -147,8 +147,8 @@ stateDiagram-v2
 
 ## Further Notes
 
-- 入れる順: `reeschan/atelier` で試す → forgers のリポジトリ 1 つで試す (どれにするかは、そのときに決める) → ほかの reeschan のリポジトリに広げる。
-- forgers のリポジトリに入れるのは、コードを外の CI と Anthropic の API に渡す変更になる。入れる前に、会社のキーと導入の許可を担当者に確かめる。
+- 入れる順: `reeschan/atelier` で試す → 仕事の組織のリポジトリ 1 つで試す (どれにするかは、そのときに決める) → ほかの reeschan のリポジトリに広げる。
+- 仕事の組織のリポジトリに入れるのは、コードを外の CI と Anthropic の API に渡す変更になる。入れる前に、会社のキーと導入の許可を担当者に確かめる。
 - CodeRabbit が入っているリポジトリでは、両方の指摘を見比べて lens-review の評価に使う。入っていないリポジトリでは見比べない。
 - public のリポジトリでは Actions のログも公開される。lens-review の端末への出力 (要確認や minor を含む) がログに出る。
 - claude-code-action の `plugin_marketplaces` でブランチを指定する書き方は、文書に無い。今は既定ブランチ `reeschan` が対象なので要らない。
