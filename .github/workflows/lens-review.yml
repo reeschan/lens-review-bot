@@ -27,8 +27,7 @@ jobs:
       decision: ${{ steps.decide.outputs.decision }}
       pr_number: ${{ steps.decide.outputs.pr_number }}
       head_sha: ${{ steps.decide.outputs.head_sha }}
-      claude_args: ${{ steps.decide.outputs.claude_args }}
-      prompt: ${{ steps.decide.outputs.prompt }}
+      config: ${{ steps.decide.outputs.config }}
     steps:
       - name: Check out lens-review-bot
         uses: actions/checkout@v4
@@ -141,7 +140,7 @@ jobs:
             printf '## lens-review\nレビューできなかった。失敗した段: %s\nログ: %s\n' \
               decide "$RUN_URL" > "$body_file"
             if [ -n "$HEAD_SHA" ]; then
-              printf '対象の head: %s\n' "${HEAD_SHA:0:7}" >> "$body_file"
+              printf '対象の head: %s\n' "$HEAD_SHA" >> "$body_file"
             fi
           fi
           ids=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
@@ -176,40 +175,50 @@ jobs:
             echo "The head moved from $HEAD_SHA to $current; reviewing the current head."
           fi
           echo "head_sha=$current" >> "$GITHUB_OUTPUT"
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Check out lens-review-bot
+        id: bot-checkout
+        uses: actions/checkout@v4
+        with:
+          repository: reeschan/lens-review-bot
+          ref: ${{ inputs.bot_ref }}
+          path: .lens-review-bot
+          persist-credentials: false
 
       - name: Check out the PR head
         id: checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ steps.stale-check.outputs.head_sha }}
+          path: target
           fetch-depth: 0
           persist-credentials: false
 
-      # claude が書ける $RUNNER_TEMP の下はここだけ (claude_args の Write)。runner の制御ファイルや workflow の一時ファイルには届かない。
-      # 書き始めた時刻を、投稿後の確認で前の回のまとめを数えないために控える。
-      - name: Prepare the temp folder for claude
-        id: prepare
-        run: |
-          mkdir -p "$RUNNER_TEMP/lens-review-claude"
-          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
+      # 失敗の報告 (bundle・model・post の段) はスクリプトが自分で書く。head が変わっていたら何も投稿せずに 0 で終わる。
       - name: Run lens-review
-        id: claude
+        id: run
         # job の時間切れでは後片付けが回らないので、この step を先に時間切れにして失敗として扱う。
         timeout-minutes: 25
-        uses: anthropics/claude-code-action@v1
-        # Bash の子プロセスから API キーを消す。PR の中身に仕込まれた指示で、gh api からキーを書き出させないため。GH_TOKEN・GITHUB_TOKEN は残る。
         env:
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1'
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          github_token: ${{ github.token }}
-          plugin_marketplaces: https://github.com/reeschan/claude-plugins-official.git
-          plugins: lens-review@reeschan-plugins
-          prompt: ${{ needs.decide.outputs.prompt }}
-          claude_args: ${{ needs.decide.outputs.claude_args }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.stale-check.outputs.head_sha }}
+          CONFIG: ${{ needs.decide.outputs.config }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 .lens-review-bot/scripts/run_review.py \
+            --repo "$REPO" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --config "$CONFIG" \
+            --root "$GITHUB_WORKSPACE/target" \
+            --run-url "$RUN_URL"
 
-      # claude の step は、投稿の gh api が失敗しても成功で終わることがある。この回に書かれたまとめに、レビューした head の完全な SHA があるかで確かめ、無ければ失敗にする。
+      # スクリプトが成功で終わっても、この回に書かれたまとめに、レビューした head の完全な SHA があるかで確かめ、無ければ失敗にする。head が変わっていたら新しい回がレビューするので確かめない。
       - name: Check that the summary was posted
         id: post-check
         env:
@@ -217,8 +226,13 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
           HEAD_SHA: ${{ steps.stale-check.outputs.head_sha }}
-          STARTED_AT: ${{ steps.prepare.outputs.started_at }}
+          STARTED_AT: ${{ steps.stale-check.outputs.started_at }}
         run: |
+          current=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha)
+          if [ "$current" != "$HEAD_SHA" ]; then
+            echo "The head moved from $HEAD_SHA to $current; the newer run reviews it."
+            exit 0
+          fi
           # updated_at と STARTED_AT はどちらも UTC の YYYY-MM-DDTHH:MM:SSZ なので、文字列の比較で前後が分かる。
           found=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
             | jq -r --arg sha "$HEAD_SHA" --arg since "$STARTED_AT" \
@@ -229,23 +243,6 @@ jobs:
             exit 1
           fi
 
-      # 後片付けが動かすスクリプトは、claude の実行の後に workspace の下の新しいパスへ取り直す。
-      - name: Clear the path for a fresh lens-review-bot
-        if: failure() && !cancelled()
-        run: rm -rf "$GITHUB_WORKSPACE/.lens-review-bot-report"
-
-      - name: Check out lens-review-bot again for the report
-        id: report-bot
-        if: failure() && !cancelled()
-        # 取れなくても後片付けは shell で組んだ本文で続ける。
-        continue-on-error: true
-        uses: actions/checkout@v4
-        with:
-          repository: reeschan/lens-review-bot
-          ref: ${{ inputs.bot_ref }}
-          path: .lens-review-bot-report
-          persist-credentials: false
-
       - name: Report the failure
         if: failure() && !cancelled()
         env:
@@ -253,27 +250,39 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.decide.outputs.pr_number }}
           HEAD_SHA: ${{ steps.stale-check.outputs.head_sha || needs.decide.outputs.head_sha }}
+          STARTED_AT: ${{ steps.stale-check.outputs.started_at }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          REPORT_BOT: ${{ steps.report-bot.outcome }}
+          RUN_OUTCOME: ${{ steps.run.outcome }}
           STAGE: >-
             ${{
               (steps.stale-check.outcome == 'failure' && 'stale-check')
-              || (steps.checkout.outcome == 'failure' && 'checkout')
+              || ((steps.bot-checkout.outcome == 'failure' || steps.checkout.outcome == 'failure') && 'checkout')
               || (steps.post-check.outcome == 'failure' && 'post')
-              || 'claude'
+              || 'model'
             }}
         run: |
+          # run_review.py は bundle・model・post の失敗を自分でまとめに書いて終わる。この回に失敗のまとめが書かれていれば二重に書かない。
+          if [ "$RUN_OUTCOME" = "failure" ] && [ -n "$STARTED_AT" ] && [ -n "$HEAD_SHA" ]; then
+            written=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              | jq -r --arg sha "$HEAD_SHA" --arg since "$STARTED_AT" \
+                '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review") and ((.body // "") | contains($sha)) and ((.body // "") | contains("失敗した段")) and (.updated_at >= $since)) | .id' \
+              | sed -n 1p) || written=
+            if [ -n "$written" ]; then
+              echo "run_review.py already wrote the failure summary."
+              exit 0
+            fi
+          fi
           mkdir -p "$RUNNER_TEMP/lens-review"
           body_file="$RUNNER_TEMP/lens-review/failure.md"
-          script="$GITHUB_WORKSPACE/.lens-review-bot-report/scripts/lens_review_config.py"
-          if [ "$REPORT_BOT" = "success" ] && [ -f "$script" ] \
+          script="$GITHUB_WORKSPACE/.lens-review-bot/scripts/lens_review_config.py"
+          if [ -f "$script" ] \
               && python3 "$script" failure-body \
                 --stage "$STAGE" --run-url "$RUN_URL" --head-sha "$HEAD_SHA" > "$body_file"; then
             :
           else
             # bot の取得に失敗したときは、failure-body と同じ形の本文を shell で組む。
             printf '## lens-review\nレビューできなかった。失敗した段: %s\nログ: %s\n対象の head: %s\n' \
-              "$STAGE" "$RUN_URL" "${HEAD_SHA:0:7}" > "$body_file"
+              "$STAGE" "$RUN_URL" "$HEAD_SHA" > "$body_file"
           fi
           ids=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
             --jq '.[] | select(.user.login == "github-actions[bot]" and ((.body // "" | split("\n")[0] | rtrimstr("\r")) == "## lens-review")) | .id')

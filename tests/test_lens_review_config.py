@@ -57,10 +57,12 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(result["decision"], "run")
         self.assertEqual((result["pr_number"], result["head_sha"], result["base_sha"]),
                          (12, "abcdef123456", "123456789abc"))
-        for value in ("--model claude-sonnet-5-5", "--max-turns 80",
-                      "--permission-mode default", "--setting-sources user"):
-            self.assertIn(value, result["claude_args"])
-        self.assertEqual(result["prompt"], "/lens-review:lens-review 12 --comment --min-severity major --post-rule-violations")
+        self.assertNotIn("claude_args", result)
+        self.assertNotIn("prompt", result)
+        self.assertEqual(json.loads(result["config"]), {
+            "model": "claude-sonnet-5-5", "max_output_tokens": 16000, "min_severity": "major",
+            "post_rule_violations": True, "rules": [], "exclude": [],
+        })
 
     def test_draft_pull_request_skips(self):
         self.assert_skip(self.decide_pr(draft=True), "draft")
@@ -133,11 +135,29 @@ class DecideTests(unittest.TestCase):
     def test_unknown_key(self):
         self.assert_config_error("unknown: value\n")
 
+    def test_removed_keys_are_unknown(self):
+        for text in ("max_turns: 80\n", "allowed_tools: []\n"):
+            with self.subTest(text=text):
+                result = self.decide_pr(text)
+                self.assertEqual(result["decision"], "config-error")
+                self.assertIn("不明な設定項目です", result["reason"])
+
     def test_quoted_integer(self):
-        self.assert_config_error('max_turns: "80"\n')
+        self.assert_config_error('max_output_tokens: "16000"\n')
 
     def test_boolean_integer(self):
-        self.assert_config_error("max_turns: true\n")
+        self.assert_config_error("max_output_tokens: true\n")
+
+    def test_max_output_tokens_out_of_range(self):
+        for value in ("0", "-1", "64001"):
+            with self.subTest(value=value):
+                self.assert_config_error(f"max_output_tokens: {value}\n")
+
+    def test_max_output_tokens_bounds_run(self):
+        for value in (1, 64000):
+            with self.subTest(value=value):
+                result = self.decide_pr(f"max_output_tokens: {value}\n")
+                self.assertEqual(json.loads(result["config"])["max_output_tokens"], value)
 
     def test_scalar_rules(self):
         self.assert_config_error("rules: a.md\n")
@@ -151,24 +171,6 @@ class DecideTests(unittest.TestCase):
     def test_unsafe_model(self):
         self.assert_config_error('model: "a;b"\n')
 
-    def test_unsafe_tool(self):
-        self.assert_config_error("allowed_tools: ['Bash($(x))']\n")
-
-    def test_added_tools_follow_defaults(self):
-        args = self.decide_pr("allowed_tools: [Bash(python:*)]\n")["claude_args"]
-        self.assertIn("Read,Grep,Glob,Agent,Skill", args)
-        self.assertIn("Write(//home/runner/work/_temp/lens-review-claude/**),Bash(python:*)", args)
-
-    def test_default_tool_is_not_duplicated(self):
-        args = self.decide_pr("allowed_tools: [Read]\n")["claude_args"]
-        self.assertEqual(args.count("Read"), 1)
-
-    def test_default_excludes_execution_and_broad_git(self):
-        args = self.decide_pr()["claude_args"]
-        for tool in ("Bash(python:*)", "Bash(npm:*)", "Bash(git:*)", "Bash(git fetch:*)",
-                     "Bash(git diff:*)", "Bash(git show:*)", "Bash(git log:*)"):
-            self.assertNotIn(tool, args)
-
     def test_null_scalars_are_config_errors(self):
         for value in ("null", "Null", "NULL", "~"):
             with self.subTest(value=value):
@@ -177,59 +179,52 @@ class DecideTests(unittest.TestCase):
     def test_trailing_tabs_and_tab_only_line(self):
         result = self.decide_pr("\t\nmin_severity: major\t # comment\n")
         self.assertEqual(result["decision"], "run")
-        self.assertIn("--min-severity major", result["prompt"])
+        self.assertEqual(json.loads(result["config"])["min_severity"], "major")
 
-    def test_default_write_is_limited_to_claude_temp(self):
-        args = self.decide_pr()["claude_args"]
-        self.assertNotIn("Write(//home/runner/work/_temp/**)", args)
-        self.assertIn("Write(//home/runner/work/_temp/lens-review-claude/**)", args)
+    def merged(self, text):
+        return json.loads(self.decide_pr(text)["config"])
 
     def test_disable_rule_violations(self):
-        prompt = self.decide_pr("post_rule_violations: false\n")["prompt"]
-        self.assertNotIn("--post-rule-violations", prompt)
+        self.assertIs(self.merged("post_rule_violations: false\n")["post_rule_violations"], False)
 
-    def test_two_rules_and_spec(self):
-        prompt = self.decide_pr("rules: [a.md, b.md]\nspec: spec.md\n")["prompt"]
-        self.assertEqual(prompt.count("--rules "), 2)
-        self.assertIn("--rules a.md --rules b.md --spec spec.md", prompt)
+    def test_rules_spec_and_exclude(self):
+        cfg = self.merged("rules: [a.md, b.md]\nspec: spec.md\nexclude: [generated/**, '*.lock']\n")
+        self.assertEqual(cfg["rules"], ["a.md", "b.md"])
+        self.assertEqual(cfg["spec"], "spec.md")
+        self.assertEqual(cfg["exclude"], ["generated/**", "*.lock"])
 
-    def test_exclusions_second_line(self):
-        prompt = self.decide_pr("exclude: [generated/**, '*.lock']\n")["prompt"]
-        self.assertEqual(prompt.splitlines()[1], "次のパス (glob) に当たるファイルは対象から除く: generated/**, *.lock")
+    def test_model_override(self):
+        self.assertEqual(self.merged("model: other-model\n")["model"], "other-model")
 
     def test_block_and_flow_lists_match(self):
         flow = self.decide_pr("rules: [a.md, b.md]\n")
         block = self.decide_pr("rules:\n  - a.md\n  - b.md\n")
-        self.assertEqual(flow["prompt"], block["prompt"])
-        self.assertEqual(flow["claude_args"], block["claude_args"])
+        self.assertEqual(flow["config"], block["config"])
 
     def test_bom_and_crlf(self):
-        result = self.decide_pr("\ufeffmax_turns: 42\r\nmin_severity: minor\r\n")
+        result = self.decide_pr("\ufeffmax_output_tokens: 42\r\nmin_severity: minor\r\n")
         self.assertEqual(result["decision"], "run")
-        self.assertIn("--max-turns 42", result["claude_args"])
-        self.assertIn("--min-severity minor", result["prompt"])
+        cfg = json.loads(result["config"])
+        self.assertEqual((cfg["max_output_tokens"], cfg["min_severity"]), (42, "minor"))
 
     def test_empty_file_uses_defaults(self):
-        self.assertEqual(self.decide_pr("")["prompt"], self.decide_pr()["prompt"])
-        self.assertEqual(self.decide_pr("")["claude_args"], self.decide_pr()["claude_args"])
+        self.assertEqual(self.decide_pr("")["config"], self.decide_pr()["config"])
 
     def test_hash_inside_quoted_value_is_preserved(self):
-        result = self.decide_pr("exclude: ['foo # bar'] # ignored\n")
-        self.assertEqual(result["decision"], "run")
-        self.assertIn("foo # bar", result["prompt"])
+        self.assertEqual(self.merged("exclude: ['foo # bar'] # ignored\n")["exclude"], ["foo # bar"])
 
     def test_skip_precedes_bad_config(self):
         self.assert_skip(self.decide_pr("unknown: value\n", draft=True), "draft")
 
 
 class FailureBodyTests(unittest.TestCase):
-    def test_failure_body_has_stage_url_and_short_sha(self):
-        body = config.failure_body("claude", "https://example.com/runs/123", "abcdef123456")
+    def test_failure_body_has_stage_url_and_full_sha(self):
+        sha = "abcdef1234567890abcdef1234567890abcdef12"
+        body = config.failure_body("model", "https://example.com/runs/123", sha)
         self.assertTrue(body.startswith("## lens-review"))
-        self.assertIn("claude", body)
+        self.assertIn("model", body)
         self.assertIn("https://example.com/runs/123", body)
-        self.assertIn("abcdef1", body)
-        self.assertNotIn("abcdef123456", body)
+        self.assertIn(sha, body)
 
     def test_failure_body_without_sha(self):
         body = config.failure_body("checkout", "https://example.com/runs/123", None)

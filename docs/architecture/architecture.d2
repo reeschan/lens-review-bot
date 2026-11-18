@@ -66,9 +66,9 @@ actions: "GitHub Actions (reusable workflow)" {
     class: svc
     icon: https://cdn.simpleicons.org/python
   }
-  review: "review\nclaude-code-action で lens-review" {
+  review: "review (run_review.py)\n束ねる → 1 回呼ぶ → 仕分けて投稿" {
     class: svc
-    icon: https://cdn.simpleicons.org/anthropic/__MONO__
+    icon: https://cdn.simpleicons.org/python
   }
 }
 
@@ -76,11 +76,11 @@ external: 外部 {
   class: saas
   direction: down
 
-  bot: "lens-review-bot\n判定のスクリプト・既定の設定" {
+  bot: "lens-review-bot\nスクリプト・既定の設定・bot の指示" {
     class: ext
     icon: https://cdn.simpleicons.org/github/__MONO__
   }
-  plugins: "claude-plugins-official\nlens-review プラグイン" {
+  plugins: "claude-plugins-official\nlens-review の観点" {
     class: ext
     icon: https://cdn.simpleicons.org/github/__MONO__
   }
@@ -95,7 +95,8 @@ target.pr -> target.caller: イベント
 target.caller -> actions.decide: workflow_call
 target.config -> actions.decide: 設定
 external.bot -> actions.decide: bot_ref で取得
+external.bot -> actions.review: bot_ref で取得
 actions.decide -> actions.review: 回すときだけ
-external.plugins -> actions.review: 最新の lens-review
-actions.review <-> external.api
+external.plugins -> actions.review: "観点 (lenses/・prompts/) を\n回すたびに取得"
+actions.review <-> external.api: "道具なしで 1 回"
 actions.review -> target.pr: "指摘とまとめを書き換えて投稿"

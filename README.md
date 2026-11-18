@@ -1,19 +1,20 @@
 # lens-review-bot
 
-GitHub Actions 上で [lens-review](https://github.com/reeschan/claude-plugins-official) を動かし、PR を自動でレビューする reusable workflow です。
+GitHub Actions 上で [lens-review](https://github.com/reeschan/claude-plugins-official) の観点を使い、PR を自動でレビューする reusable workflow です。
 
-- PR を開いたとき・draft を外したとき・push したとき・`/lens-review` とコメントしたときに起動し、`reeschan/claude-plugins-official` の既定ブランチにある最新の `lens-review` でレビューします。
+- PR を開いたとき・draft を外したとき・push したとき・`/lens-review` とコメントしたときに起動し、`reeschan/claude-plugins-official` の既定ブランチにある最新の観点（`lenses/*.md`）と担当・検証の指示（`prompts/*.md`）でレビューします。
+- 1 回のレビューは「スクリプトが束ねる → モデルを 1 回呼ぶ → スクリプトが投稿する」です。モデルには道具を渡さず、ファイルを読み回ったり自分で投稿したりしません。
 - PR への投稿は重複を避け、まとめのコメントを 1 つに保って書き換えます。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/architecture-dark.svg">
-  <img src="docs/architecture/architecture-light.svg" alt="lens-review-bot のアーキテクチャ図。対象リポジトリの PR のイベントで呼ぶ側の workflow が reusable workflow を呼び、decide が回すかと設定を決め、review が claude-code-action で最新の lens-review を回して PR に指摘とまとめを投稿する">
+  <img src="docs/architecture/architecture-light.svg" alt="lens-review-bot のアーキテクチャ図。対象リポジトリの PR のイベントで呼ぶ側の workflow が reusable workflow を呼び、decide が回すかと設定を決め、review が diff・変更後の全文・規約・観点を束ね、Anthropic API を道具なしで 1 回呼び、返った指摘を仕分けて PR に指摘とまとめを投稿する">
 </picture>
 
 図のソースは [`docs/architecture/architecture.d2`](docs/architecture/architecture.d2) です。構成が変わったら、ソースを直して arch-diagram で描き直してください。
 
-> [!IMPORTANT]
-> `reeschan/claude-plugins-official` の既定ブランチに **lens-review 0.3.0 以上** が入ってから利用してください（0.2 系では 2 回目以降にコメントが投稿されません）。
+> [!NOTE]
+> 観点と担当・検証の指示は、回すたびに `reeschan/claude-plugins-official` の既定ブランチから取ります。取れなかったときはレビューせず、まとめに「失敗した段: model」と書いて失敗します。lens-review のスキル本体（`SKILL.md`）は使いません。
 
 ---
 
@@ -65,13 +66,12 @@ jobs:
 | 項目 | 既定 | 意味 |
 |---|---|---|
 | `model` | `claude-sonnet-5-5` | レビューに使うモデル |
-| `max_turns` | `80` | ターンの上限 |
+| `max_output_tokens` | `16000` | モデルの出力の上限（1 以上 64000 以下の整数）。大きな PR で指摘が切れるときに上げる |
 | `min_severity` | `major` | PR に出す重大度の下限 (`critical`・`major`・`minor`) |
 | `post_rule_violations` | `true` | 規約に反する指摘を、重大度に関係なく出すか |
 | `rules` | なし | 追加の規約のパスの一覧 |
 | `spec` | なし | 仕様のパス |
 | `exclude` | なし | 見ないパスの一覧 (glob) |
-| `allowed_tools` | なし | 許す操作に足すもの |
 
 ### 設定ファイルの書式
 
@@ -81,14 +81,13 @@ jobs:
 - 空行、`#` で始まる行、引用符の外の行末 ` #` 以降は無視します。
 - 値として使えるもの:
   - 真偽値: `true` / `false`
-  - 整数: `max_turns` は `1` 以上 `500` 以下（真偽値は不可）
+  - 整数: `max_output_tokens` は `1` 以上 `64000` 以下（真偽値は不可）
   - 文字列: 引用符なし、または `'...'` / `"..."`
   - 一覧: フロー形式 `[a, b]` またはブロック形式（次の行から同じ字下げで `- item`）
 - 主な制約:
   - `model`: `[A-Za-z0-9._:@/\[\]-]+` のみ（空白不可）
   - `rules`・`spec`: リポジトリからの相対パス（空不可、`/` 始まり不可、`..` 不可、空白・引用符・`$`・`` ` ``・`\`・改行不可）
   - `exclude`: 空不可、引用符・`$`・`` ` ``・`\`・改行不可
-  - `allowed_tools`: 空不可、`,`・引用符・`$`・`` ` ``・`\`・改行不可
 
 ---
 
@@ -109,35 +108,48 @@ jobs:
 - 閉じた（`closed`）PR へのコメント、PR 以外の issue へのコメント、`/lens-review` で始まらないコメント（`/lens-reviewer` などは対象外）
 - `issue_comment` でコメントした人にリポジトリへの書き込み権限（`admin`・`maintain`・`write`）が無いとき
 
-同じ PR に対するレビューは `concurrency` により 1 つにまとめられ、新しい実行が始まると古い実行はキャンセルされます（`cancel-in-progress: true`）。job 全体の上限は 30 分、Claude 実行 step の上限は 25 分です。
+同じ PR に対するレビューは `concurrency` により 1 つにまとめられ、新しい実行が始まると古い実行はキャンセルされます（`cancel-in-progress: true`）。job 全体の上限は 30 分、レビューを回す step（束ねる・モデルを呼ぶ・投稿する）の上限は 25 分です。
+
+---
+
+## 1 回のレビューの流れ
+
+1. **束ねる**: 規約（ルートと、変わったファイルのフォルダにある `CLAUDE.md`・`AGENTS.md`、設定の `rules`）・仕様（`spec`）・diff・変わったファイルの変更後の全文（行番号付き）・観点・既に投稿した指摘の一覧をまとめます。`exclude` に当たるファイルは diff からも全文からも除きます。束ねが文字数の上限を超えたときは、大きいファイルの全文を外す → diff を前後数行に縮める → diff もファイル名だけにする、の順に削り、削った中身をまとめに書きます。
+2. **モデルを 1 回呼ぶ**: Messages API を道具なしで 1 回呼び、決まった形の指摘の一覧を受け取ります（429・529・5xx は間を空けて 3 回までやり直します）。
+3. **仕分けて投稿する**: 形の確かめ → 根拠の引用が束ねにあるかの確かめ → 行が diff の中か → 下限 → 同じ指摘の除外の順に仕分け、インラインの指摘とまとめを投稿します。
+
+使ったトークン数（入力・出力）は Actions のログと job summary に出ます。PR には出ません。
 
 ---
 
 ## PR に出るもの
 
-- **インラインコメント**: `critical`・`major` の指摘と、`post_rule_violations: true` のときはリポジトリの規約（`CLAUDE.md`・`AGENTS.md`・`rules`）に反する指摘を重大度に関係なく出します（下限は `min_severity` で変更できます）。
-  - 既存のインラインコメントに付いた印（`<!-- lens-review: ... -->`）と同じ指摘は重ねて出しません。
+- **インラインコメント**: `critical`・`major` の指摘と、`post_rule_violations: true` のときはリポジトリの規約（`CLAUDE.md`・`AGENTS.md`・`rules`）に反する指摘を重大度に関係なく出します（下限は `min_severity` で変更できます）。規約に反すると認めるのは、指摘が示した規約のパスが、束ねに入れた規約のファイルのどれかのときだけです。
+  - インラインコメントの先頭には印（`<!-- lens-review: <file>:<行> <見出し> #<ハッシュ> [<観点>] -->`）が付きます。ハッシュは、空白を詰めた根拠の引用の SHA-256 の先頭 8 桁です。既存の印と、ファイル・観点・ハッシュが同じ指摘は、見出しの言い回しが違っても重ねて出しません（ハッシュと観点が無い古い形の印は、ファイルと見出しが同じなら同じ指摘とみなします）。同じ根拠でも観点が違う指摘は、別の指摘として出ます。
+  - 根拠の引用が束ねに無い指摘は捨て、`line` が diff の変更後の範囲に無い指摘はインラインでなくまとめに載せます（本文・規約・根拠の引用は `<details>` で畳んで載せます）。
   - レビュー種別は `COMMENT` のみで、承認や変更要求はしません。
-- **まとめのコメント**: 1 行目が `## lens-review` の `github-actions[bot]` によるコメントを 1 つだけ作成・書き換えます。出さなかった `minor` の件数などもまとめに載ります。
+- **まとめのコメント**: 1 行目が `## lens-review` の `github-actions[bot]` によるコメントを 1 つだけ作成・書き換えます。出さなかった `minor` の件数・捨てた指摘の件数・削った中身などもまとめに載ります。
 
 ---
 
 ## 失敗したとき
 
 - `.github/lens-review.yml` が読めない・不正な場合は、理由と base SHA をまとめのコメントに書き、job は失敗します。
-- PR 情報の取得・チェックアウト・Claude の実行（25 分の時間切れを含む）に失敗した場合は、失敗した段・Actions ログへのリンク・取得できた対象の head SHA をまとめに書き、job は失敗します。
-- 新しい push などにより実行がキャンセルされた場合は、失敗のコメントは書きません（後続の実行がまとめを更新します）。
+- 束ね（`bundle`: diff や観点の取得）・モデルの呼び出し（`model`: API キーが無い・やり直しても失敗・出力が上限で切れた・応答に指摘が無い・観点が取れない）・投稿（`post`）に失敗した場合は、スクリプトが「失敗した段: bundle / model / post」・Actions ログへのリンク・対象の head SHA をまとめに書き、job は失敗します。PR 情報の取得・チェックアウトの失敗や 25 分の時間切れは、workflow の後片付けの段が同じ形で書きます。
+- モデルが答えなかった回は、何も投稿しません。
+- 新しい push などにより実行がキャンセルされた場合や、投稿の直前や失敗した時点で head が変わっていた場合は、失敗のコメントは書きません（後続の実行がまとめを更新します）。
 
 ---
 
 ## 安全について
 
 - **fork からの PR は回りません**: `pull_request_target` を使わず、fork からの PR はスキップするため、外部コードと同じ環境に `ANTHROPIC_API_KEY` が置かれません。
-- **設定は base ブランチの版を読みます**: `.github/lens-review.yml` は PR の base ブランチから API で取得するため、PR 内で設定を変えて許可ツールを増やしたり条件を緩めたりしても、その PR のレビューには効きません。
-- **`.github/lens-review.yml` 以外は PR の head の版が動きます**: 呼ぶ側の workflow 自体（`.github/workflows/lens-review.yml`）や、チェックアウトして読む `CLAUDE.md`・`AGENTS.md`・`rules`・`spec` は PR の head の版が使われます。
-- **コードは既定で実行しません**: テスト・インタプリタ・パッケージマネージャなどは既定の許可ツールに含めておらず、`--permission-mode default` と `--setting-sources user` で実行を制限しています。必要なコマンドのみ `allowed_tools` で明示的に追加できます。
-- **Git の書き出しを制限します**: `--output` で任意のファイルに書ける `git diff`・`git show`・`git log` と、任意のコマンドを実行できる `git fetch` は既定では許可しません。
-- **public リポジトリではログが公開されます**: GitHub Actions の実行ログには `lens-review` の端末向け出力（PR に出さなかった `minor` や要確認項目を含む）が出力される点に注意してください。
+- **設定は base ブランチの版を読みます**: `.github/lens-review.yml` は PR の base ブランチから API で取得するため、PR 内で設定を変えて条件を緩めても、その PR のレビューには効きません。
+- **`.github/lens-review.yml` 以外は PR の head の版が動きます**: 呼ぶ側の workflow 自体（`.github/workflows/lens-review.yml`）や、チェックアウトして束ねに入れる `CLAUDE.md`・`AGENTS.md`・`rules`・`spec` と変わったファイルは PR の head の版が使われます。
+- **道具を使いません**: モデルには道具を渡さず（返す形は structured outputs の JSON Schema で決めます）、ファイルの読み出しも、コマンドやコードの実行もさせません。PR のコードは実行されないため、許可する操作の設定はありません。
+- **API キーはスクリプトにだけ渡ります**: `ANTHROPIC_API_KEY` は、レビューを回す step のスクリプトが Messages API を呼ぶときにだけ使います。束ねやモデルの応答には含まれず、PR のコメント・ログ・job summary にも出しません。
+- **投稿の前に head を確かめます**: 投稿の直前に PR の head が変わっていたら、何も投稿せずに終わります（新しい回が、新しい head をレビューします）。
+- **public リポジトリではログが公開されます**: GitHub Actions の実行ログと job summary には、使ったトークン数が出ます。PR に出さなかった指摘の内容は出しませんが、束ねに入れたファイルの内容は Anthropic API に送られます。
 
 ---
 
