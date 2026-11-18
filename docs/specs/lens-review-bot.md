@@ -10,7 +10,7 @@ lens-review は、裏を取った指摘だけを日本語で出すレビュー�
 
 GitHub Actions で lens-review の観点を使う bot を作る。PR を開いたとき、draft を外したとき、push のたび、`/lens-review` とコメントしたときに起動し、`reeschan/claude-plugins-official` の既定ブランチの最新の観点で PR をレビューする。1 回のレビューは「スクリプトが束ねる → モデルを 1 回呼ぶ → スクリプトが投稿する」で、モデルには道具を渡さない。PR に出すのは critical・major の指摘と、そのリポジトリの規約に反する指摘だけ。コメントの重なりを避け、まとめのコメントは 1 つを書き換える。モデル・出力の上限・出す重大度の下限・追加の規約・見ないパスは、リポジトリごとの設定ファイルで変えられる。
 
-bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workflow として置き、使うリポジトリには数行の workflow と設定ファイルだけを置く。自分のリポジトリでも、試しに入れる forgers のリポジトリでも、同じ形で使う。
+bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workflow として置き、使うリポジトリには数行の workflow と設定ファイルだけを置く。自分のリポジトリでも、試しに入れる 仕事の組織のリポジトリでも、同じ形で使う。
 
 ## User Stories
 
@@ -51,7 +51,7 @@ bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workfl
 **構成**
 
 - 新しい public のリポジトリ `reeschan/lens-review-bot` を作る。中身は reusable workflow、スクリプト（設定・束ね・モデルの呼び出し・指摘の仕分け・投稿）、bot の指示（`prompts/bot-instruction.md`）、既定の設定、README、仕様。秘密は入れない。private の reusable workflow は別のアカウントや組織からは呼べないので、public にする。
-- 使うリポジトリには、reusable workflow を呼ぶ workflow (数行) と、任意の設定ファイル `.github/lens-review.yml` を置く。secret `ANTHROPIC_API_KEY` は使うリポジトリごとに入れる (個人アカウントには組織の secret が無い)。reeschan のリポジトリは持ち主のキー、forgers のリポジトリは会社が出すキー。
+- 使うリポジトリには、reusable workflow を呼ぶ workflow (数行) と、任意の設定ファイル `.github/lens-review.yml` を置く。secret `ANTHROPIC_API_KEY` は使うリポジトリごとに入れる (個人アカウントには組織の secret が無い)。reeschan のリポジトリは持ち主のキー、仕事の組織のリポジトリは会社が出すキー。
 - 実行は、review の job が bot のスクリプト `scripts/run_review.py`（標準ライブラリだけ）を 1 本走らせる。Messages API は `urllib` で、GitHub は `gh` で呼ぶ。認証は secret `ANTHROPIC_API_KEY` を、そのスクリプトの環境変数にだけ渡す。外部の実行基盤・プラグインのインストール・サンドボックスは使わない。
 - 観点（`lenses/*.md`）と担当・検証の指示（`prompts/*.md`）は、回すたびに `reeschan/claude-plugins-official` の既定ブランチから取る。版は固定しない。取れなければレビューせず「失敗した段: model」とする。lens-review の `SKILL.md` は使わない。
 - コメントは workflow の `GITHUB_TOKEN` で付ける (`github-actions[bot]` の名前)。`lens-review[bot]` の名前にしたくなったら、自分の GitHub App に移す (今回はしない)。
@@ -98,7 +98,7 @@ bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workfl
 
 **投稿の決まり**
 
-- 印の形: `<!-- lens-review: <file>:<行> <見出し> #<ハッシュ> -->`。ハッシュは、空白を詰めた根拠の引用の SHA-256 の先頭 8 桁。1 件の本文は、印 → 「**[重大度] 見出し**」→ 本文 → 根拠の引用の順。
+- 印の形: `<!-- lens-review: <file>:<行> <見出し> #<ハッシュ> [<観点>] -->`。ハッシュは、空白を詰めた根拠の引用の SHA-256 の先頭 8 桁。1 件の本文は、印 → 「**[重大度] 見出し**」→ 本文 → 根拠の引用の順。
 - 新しい指摘は、`COMMENT` の 1 つのレビューにまとめて付ける。出すものが無ければレビューは作らない。承認・変更要求はしない。
 - まとめのコメント (1 行目が「## lens-review」で書き手が bot) は 1 つだけ作り、あれば書き換える。中身は、レビューした head の完全な SHA (40 文字)・重大度ごとの件数・今回の指摘・前に出した指摘・diff の外の指摘・出さなかった件数 (下限より軽いもの)・捨てた件数 (形が違う・根拠の引用が束ねに無い)・削った中身。要確認は PR に出さない。
 - 手元の lens-review (`claude-plugins-official`) は今の作りのまま残る。手元の `--comment` と bot は、同じ形の印で重複を避ける (印のハッシュは bot だけが付ける)。
@@ -108,7 +108,7 @@ bot は public のリポジトリ `reeschan/lens-review-bot` に reusable workfl
 - 束ね (`bundle`: diff・既存コメントの取得)・モデルの呼び出し (`model`: API キーが無い、観点が取れない、やり直しても失敗、`max_tokens` で切れた、断られた、答えが JSON でない、束ねが上限に収まらない)・投稿 (`post`) のどれかが失敗したら、スクリプトが、まとめのコメントを「レビューできなかった。失敗した段: <段>」と理由・ログへのリンク・対象の head SHA に書き換える。job も失敗にする。
 - PR 情報の取得・チェックアウトの失敗や step の時間切れ (25 分) は、workflow の後片付けの段が同じ形で書く。スクリプトが書いた回は二重に書かない。
 - モデルが答えなかった回は、何も投稿しない。
-- 新しい push で止められたレビュー (cancel) や、投稿の直前に head が変わっていた回は、失敗として書かない。次のレビューがまとめを書き換える。
+- 新しい push で止められたレビュー (cancel) や、投稿の直前に head が変わっていた回は、失敗として書かない。束ね・モデルの段で失敗したときも、その時点で head が変わっていれば失敗のまとめは書かない。次のレビューがまとめを書き換える。
 
 **状態の図 (1 つの PR のレビュー)**
 
@@ -157,8 +157,8 @@ stateDiagram-v2
 
 ## Further Notes
 
-- 入れる順: `reeschan/atelier` で試す → forgers のリポジトリ 1 つで試す (どれにするかは、そのときに決める) → ほかの reeschan のリポジトリに広げる。
-- forgers のリポジトリに入れるのは、コードを外の CI と Anthropic の API に渡す変更になる。入れる前に、会社のキーと導入の許可を担当者に確かめる。
+- 入れる順: `reeschan/atelier` で試す → 仕事の組織のリポジトリ 1 つで試す (どれにするかは、そのときに決める) → ほかの reeschan のリポジトリに広げる。
+- 仕事の組織のリポジトリに入れるのは、コードを外の CI と Anthropic の API に渡す変更になる。入れる前に、会社のキーと導入の許可を担当者に確かめる。
 - CodeRabbit が入っているリポジトリでは、両方の指摘を見比べて lens-review の評価に使う。入っていないリポジトリでは見比べない。
 - public のリポジトリでは Actions のログも公開される。ログと job summary に出るのは、使ったトークン数と、失敗の理由・投稿した件数。指摘の内容は出さない。
 - 状態の図の `%% never` のうち「同じ PR で、レビューが 2 つ同時に投稿する」と「新しいレビューが終わった後に、古いレビューが投稿する」は、古いレビューと新しいレビューを 2 つの領域にした図で TLC にかけ、どちらも成り立つことを確かめた (9 状態)。前提は、新しい push で古いレビューが止まること (`concurrency` の `cancel-in-progress`)。止まる前に投稿の途中だった分は、次のレビューが投稿済みの印 (ファイル・観点・ハッシュ) で重ならないようにする。

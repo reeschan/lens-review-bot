@@ -43,7 +43,7 @@ STAGE_LABELS = {
 }
 
 MARKER_RE = re.compile(
-    r"<!--\s*lens-review:\s*(?P<file>\S+):(?P<line>\d+)\s+(?P<heading>.*?)"
+    r"<!--\s*lens-review:\s*(?P<file>.+?):(?P<line>\d+)\s+(?P<heading>.*?)"
     r"(?:\s+#(?P<hash>[0-9a-fA-F]{8})\s+\[(?P<lens>[^\]\n]*)\])?\s*-->"
 )
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
@@ -251,12 +251,16 @@ def shrink_hunk(hunk: list[str], context: int) -> list[list[str]]:
     if not changes:
         return []
 
+    near = [False] * len(body)
+    for j in changes:
+        for i in range(max(0, j - context), min(len(body), j + context + 1)):
+            near[i] = True
     keep = [False] * len(body)
     for i, line in enumerate(body):
         if line.startswith("\\"):
             keep[i] = i > 0 and keep[i - 1]
-            continue
-        keep[i] = any(abs(i - j) <= context for j in changes)
+        else:
+            keep[i] = near[i]
 
     old_pos = old_start - 1 if old_count > 0 else old_start
     new_pos = new_start - 1 if new_count > 0 else new_start
