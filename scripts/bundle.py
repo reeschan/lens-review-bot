@@ -44,7 +44,7 @@ STAGE_LABELS = {
 
 MARKER_RE = re.compile(
     r"<!--\s*lens-review:\s*(?P<file>\S+):(?P<line>\d+)\s+(?P<heading>.*?)"
-    r"(?:\s+#(?P<hash>[0-9a-fA-F]{8}))?\s*-->"
+    r"(?:\s+#(?P<hash>[0-9a-fA-F]{8})\s+\[(?P<lens>[^\]\n]*)\])?\s*-->"
 )
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
 DIFF_HEADER_RE = re.compile(r"^diff --git ")

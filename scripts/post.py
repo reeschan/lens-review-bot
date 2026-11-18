@@ -63,7 +63,10 @@ def run_gh(args: list, input_text: str | None = None) -> str:
 
 
 def marker(finding: Finding) -> str:
-    return f"<!-- lens-review: {finding.file}:{finding.line} {finding.heading} #{finding.hash} -->"
+    return (
+        f"<!-- lens-review: {finding.file}:{finding.line} {finding.heading}"
+        f" #{finding.hash} [{finding.lens}] -->"
+    )
 
 
 def _fence(text: str) -> str:

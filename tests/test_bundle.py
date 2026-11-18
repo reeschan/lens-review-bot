@@ -93,9 +93,10 @@ class ContentsTests(BundleTestCase):
         self.write("src/app/main.py", "first\nsecond\nthird\n")
         diff = file_diff("src/app/main.py", ["old"], ["second"], start=2)
         bodies = [
-            "<!-- lens-review: src/app/main.py:2 Fix the loop #0123abcd -->\n**[major] Fix the loop**",
+            "<!-- lens-review: src/app/main.py:2 Fix the loop #0123abcd [logic] -->\n"
+            "**[major] Fix the loop**",
             "<!-- lens-review: README.md:10 Old style heading -->\nbody",
-            "<!-- lens-review: src/app/main.py:5 Fix the loop #0123abcd -->",
+            "<!-- lens-review: src/app/main.py:5 Fix the loop #0123abcd [logic] -->",
         ]
         result = self.build(diff, {"rules": ["docs/rule.md"], "spec": "docs/spec.md"}, bodies)
 
@@ -299,7 +300,7 @@ class DiffTests(unittest.TestCase):
         self.assertEqual([f.deleted for f in files], [False, False, False])
 
     def test_existing_findings_from_markers(self):
-        bodies = ["<!-- lens-review: a/b.py:12 Heading with spaces #deadbeef -->",
+        bodies = ["<!-- lens-review: a/b.py:12 Heading with spaces #deadbeef [logic] -->",
                   "<!-- lens-review: c.py:3 Old form heading -->", "no marker", None]
         self.assertEqual(bundle.existing_findings(bodies),
                          [("a/b.py", "Heading with spaces"), ("c.py", "Old form heading")])
