@@ -228,6 +228,13 @@ class RunReviewTest(unittest.TestCase):
         self.assertEqual(gh.posted_summaries, [])
         self.assertFalse(any(c[1] is not None for c in gh.calls))
 
+    def test_failure_after_head_change_writes_no_failure_summary(self):
+        gh = FakeGh(head=OTHER_HEAD)
+        outcome, _, _ = self.run_review(gh, fake_model(error=ModelError("HTTP 500")))
+        self.assertEqual(outcome.kind, "cancelled")
+        self.assertEqual(outcome.exit_code, 0)
+        self.assertEqual(gh.posted_summaries, [])
+
     def test_post_failure_writes_stage_post(self):
         gh = FakeGh(fail_on=f"repos/{REPO}/pulls/{PR}/reviews")
         model = fake_model([FINDING])

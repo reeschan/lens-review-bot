@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -288,6 +289,14 @@ class DiffTests(unittest.TestCase):
         self.assertEqual(bundle.shrink_hunk(hunk, 1), [
             ["@@ -6,2 +6,4 @@", " b", "+x", "+y", " c", "\\ No newline at end of file"],
         ])
+
+    def test_shrink_hunk_of_a_large_new_file_is_linear(self):
+        size = 200_000
+        hunk = [f"@@ -0,0 +1,{size} @@"] + [f"+line{i}" for i in range(size)]
+        started = time.monotonic()
+        shrunk = bundle.shrink_hunk(hunk, 3)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(shrunk, [hunk])
 
     def test_parse_diff_paths(self):
         diff = ("diff --git a/old.py b/new.py\nsimilarity index 90%\nrename from old.py\n"

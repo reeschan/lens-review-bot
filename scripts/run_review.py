@@ -103,6 +103,17 @@ def current_head_sha(gh: post_mod.GhRunner, repo: str, pr_number: int) -> str:
     return out.strip()
 
 
+def head_moved(gh: post_mod.GhRunner, repo: str, pr_number: int, head_sha: str) -> bool:
+    """True only when the PR's head is known to differ from `head_sha`.
+
+    When the head cannot be read, the failure is still reported (False).
+    """
+    try:
+        return current_head_sha(gh, repo, pr_number) != head_sha
+    except PostError:
+        return False
+
+
 def report_tokens(input_tokens: int, output_tokens: int, summary_path: str | None) -> None:
     """Print the token counts and append them to $GITHUB_STEP_SUMMARY when set."""
     line = f"使ったトークン: 入力 {input_tokens} / 出力 {output_tokens}"
@@ -143,6 +154,9 @@ def run(
 
     def fail(stage: str, reason: str) -> RunOutcome:
         print(f"失敗した段: {stage}: {reason}", file=sys.stderr)
+        if head_moved(gh, repo, pr_number, head_sha):
+            print("head が変わったため失敗のまとめを書かずに終わります")
+            return RunOutcome(OUTCOME_CANCELLED)
         write_failure(gh, repo, pr_number, head_sha, run_url, bot_login, stage, reason)
         return RunOutcome(OUTCOME_FAILED, stage, reason)
 

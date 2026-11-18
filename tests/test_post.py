@@ -94,6 +94,12 @@ class InlineBodyTests(unittest.TestCase):
         self.assertEqual(markers[0].hash, f.hash)
         self.assertEqual(markers[0].lens, f.lens_key)
 
+    def test_marker_with_space_in_path_is_read_back(self):
+        f = finding(file="docs/my notes/a b.py")
+        markers = read_markers([p.inline_body(f)])
+        self.assertEqual([(m.file, m.heading, m.hash) for m in markers],
+                         [("docs/my notes/a b.py", f.heading_key, f.hash)])
+
     def test_quote_with_backticks_gets_a_longer_fence(self):
         body = p.inline_body(finding(quote="s = ```x```"))
         self.assertTrue(body.endswith("根拠:\n````\ns = ```x```\n````"))
