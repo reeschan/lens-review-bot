@@ -77,6 +77,9 @@ class ShapeTest(unittest.TestCase):
             finding(file="   "),
             finding(heading="two\nlines"),
             finding(heading="breaks --> marker"),
+            finding(lens="breaks --> marker"),
+            finding(lens="two\nlines"),
+            finding(lens="has ] bracket"),
             finding(body=None),
         ]
         result = run(bad[:5] + [good] + bad[5:])
@@ -158,8 +161,8 @@ class LowerBoundTest(unittest.TestCase):
     def test_lighter_than_min_is_counted_not_shown(self):
         config = {"min_severity": "major", "post_rule_violations": False}
         result = run(
-            [finding(severity="minor"), finding(severity="major", heading="h2"),
-             finding(severity="critical", heading="h3"),
+            [finding(severity="minor"), finding(severity="major", lens="l2"),
+             finding(severity="critical", lens="l3"),
              finding(severity="minor", line=2, quote="def main():", heading="h4")],
             config,
         )
@@ -206,31 +209,42 @@ class HashTest(unittest.TestCase):
 
 
 class SameFindingTest(unittest.TestCase):
-    def marker(self, file, line, heading, h=None):
-        tail = f" #{h}" if h else ""
+    def marker(self, file, line, heading, h=None, lens="correctness"):
+        tail = f" #{h} [{lens}]" if h else ""
         return f"<!-- lens-review: {file}:{line} {heading}{tail} -->\n**[major] {heading}**"
 
     def test_read_markers_both_forms(self):
-        bodies = [self.marker("app.py", 3, "見出し A", "ABCDEF12"),
+        bodies = [self.marker("app.py", 3, "見出し A", "ABCDEF12", lens="規約と  仕様"),
                   self.marker("app.py", 9, "見出し B")]
         self.assertEqual(t.read_markers(bodies), [
-            t.Marker("app.py", "見出し A", "abcdef12"),
-            t.Marker("app.py", "見出し B", None),
+            t.Marker("app.py", "見出し A", "abcdef12", "規約と 仕様"),
+            t.Marker("app.py", "見出し B", None, None),
         ])
 
-    def test_hashed_marker_matches_file_heading_hash_ignoring_line(self):
+    def test_hashed_marker_without_lens_is_read_as_old_form(self):
+        body = "<!-- lens-review: app.py:3 見出し A #abcdef12 -->"
+        self.assertEqual(t.read_markers([body]),
+                         [t.Marker("app.py", "見出し A #abcdef12", None, None)])
+
+    def test_new_marker_matches_file_lens_hash_ignoring_heading_and_line(self):
         f = finding()
-        bodies = [self.marker("app.py", 999, f["heading"], sha8("b = 3"))]
+        bodies = [self.marker("app.py", 999, "言い換えた見出し", sha8("b = 3"))]
         result = run([f], bodies=bodies)
         self.assertEqual(result.inline, [])
         self.assertEqual(len(result.previous), 1)
 
-    def test_same_file_and_heading_with_other_hash_is_kept(self):
+    def test_same_file_and_lens_with_other_hash_is_kept(self):
         f = finding()
         bodies = [self.marker("app.py", 11, f["heading"], sha8("c = 4"))]
         result = run([f], bodies=bodies)
         self.assertEqual(len(result.inline), 1)
         self.assertEqual(result.previous, [])
+
+    def test_same_quote_with_other_lens_is_kept(self):
+        f = finding(lens="規約と仕様")
+        bodies = [self.marker("app.py", 11, f["heading"], sha8("b = 3"), lens="correctness")]
+        result = run([f], bodies=bodies)
+        self.assertEqual(len(result.inline), 1)
 
     def test_old_marker_matches_file_and_heading_only(self):
         f = finding()
@@ -240,8 +254,8 @@ class SameFindingTest(unittest.TestCase):
 
     def test_other_file_or_heading_does_not_match(self):
         f = finding()
-        bodies = [self.marker("other.py", 11, f["heading"]),
-                  self.marker("app.py", 11, "別の見出し", sha8("b = 3"))]
+        bodies = [self.marker("other.py", 11, f["heading"], sha8("b = 3")),
+                  self.marker("app.py", 11, "別の見出し")]
         result = run([f], bodies=bodies)
         self.assertEqual(len(result.inline), 1)
 
@@ -252,16 +266,20 @@ class SameFindingTest(unittest.TestCase):
         self.assertEqual(result.outside_diff, [])
 
     def test_repeat_in_same_run_is_not_posted_twice(self):
-        result = run([finding(), finding(line=12)])
+        result = run([finding(), finding(line=12, heading="言い換え")])
         self.assertEqual(len(result.inline), 1)
         self.assertEqual(len(result.repeated), 1)
+
+    def test_same_quote_other_lens_in_same_run_is_kept(self):
+        result = run([finding(), finding(lens="規約と仕様")])
+        self.assertEqual(len(result.inline), 2)
 
 
 class OrderTest(unittest.TestCase):
     def test_each_finding_lands_in_one_category_by_stage_order(self):
         config = {"min_severity": "major", "post_rule_violations": False}
         heading = "b の値が違う"
-        bodies = [f"<!-- lens-review: app.py:11 {heading} #{sha8('b = 3')} -->"]
+        bodies = [f"<!-- lens-review: app.py:11 {heading} #{sha8('b = 3')} [correctness] -->"]
         findings = [
             finding(severity="bogus"),                              # 1: shape
             finding(severity="bogus", quote="nowhere"),             # 1 before 2

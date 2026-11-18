@@ -14,8 +14,10 @@ The stages run in this order:
    regardless of the lower bound.
 5. same finding: a finding that matches a marker of an existing inline finding
    is not posted and goes to "posted before". A marker with a hash matches on
-   file, heading and hash; an old marker without a hash matches on file and
-   heading. The line number in a marker is never compared.
+   file, lens and hash, so a reworded heading still matches; an old marker
+   without a hash matches on file and heading. The line number in a marker is
+   never compared. Within one run, findings with the same file, lens and hash
+   are posted once.
 
 Stages 3 to 5 decide the category of a finding that passed stages 1 and 2.
 Each finding ends in exactly one category; when several apply, the earlier one
@@ -82,6 +84,10 @@ class Finding:
     def heading_key(self) -> str:
         return squeeze_whitespace(self.heading)
 
+    @property
+    def lens_key(self) -> str:
+        return squeeze_whitespace(self.lens)
+
 
 @dataclass
 class TriageResult:
@@ -121,10 +127,14 @@ def parse_finding(raw: object) -> Finding | None:
         return None
     if raw["severity"] not in SEVERITY_RANK:
         return None
-    heading = raw["heading"]
-    # The heading goes into a one-line HTML comment marker.
-    if "\n" in heading or "\r" in heading or "-->" in heading:
+    # The heading and the lens go into a one-line HTML comment marker; the lens
+    # sits inside [ ].
+    for text in (raw["heading"], raw["lens"]):
+        if "\n" in text or "\r" in text or "-->" in text:
+            return None
+    if "]" in raw["lens"]:
         return None
+    heading = raw["heading"]
     return Finding(
         file=raw["file"],
         line=line,
@@ -217,11 +227,12 @@ def is_shown(finding: Finding, min_severity: str, post_rule_violations: bool) ->
 
 @dataclass(frozen=True)
 class Marker:
-    """A marker read from an existing inline finding. `hash` is None for the old form."""
+    """A marker read from an existing inline finding. `hash` and `lens` are None for the old form."""
 
     file: str
     heading: str
     hash: str | None
+    lens: str | None
 
 
 def read_markers(bodies: Iterable[str]) -> list[Marker]:
@@ -234,6 +245,7 @@ def read_markers(bodies: Iterable[str]) -> list[Marker]:
                 file=match.group("file"),
                 heading=squeeze_whitespace(match.group("heading")),
                 hash=raw_hash.lower() if raw_hash else None,
+                lens=squeeze_whitespace(match.group("lens")) if raw_hash else None,
             )
             if marker not in markers:
                 markers.append(marker)
@@ -242,9 +254,12 @@ def read_markers(bodies: Iterable[str]) -> list[Marker]:
 
 def matches_marker(finding: Finding, markers: Iterable[Marker]) -> bool:
     for marker in markers:
-        if marker.file != finding.file or marker.heading != finding.heading_key:
+        if marker.file != finding.file:
             continue
-        if marker.hash is None or marker.hash == finding.hash:
+        if marker.hash is None:
+            if marker.heading == finding.heading_key:
+                return True
+        elif (marker.lens, marker.hash) == (finding.lens_key, finding.hash):
             return True
     return False
 
@@ -291,7 +306,7 @@ def triage(
         if matches_marker(finding, markers):
             result.previous.append(finding)
             continue
-        key = (finding.file, finding.heading_key, finding.hash)
+        key = (finding.file, finding.lens_key, finding.hash)
         if key in seen:
             result.repeated.append(finding)
             continue

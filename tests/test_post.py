@@ -78,7 +78,7 @@ class InlineBodyTests(unittest.TestCase):
         body = p.inline_body(finding())
         h = quote_hash("b = 3")
         expected = (
-            f"<!-- lens-review: src/app.py:11 b の値が違う #{h} -->\n\n"
+            f"<!-- lens-review: src/app.py:11 b の値が違う #{h} [correctness] -->\n\n"
             "**[major] b の値が違う**\n\n"
             "b は 2 のはず。\n\n"
             "根拠:\n```\nb = 3\n```"
@@ -92,6 +92,7 @@ class InlineBodyTests(unittest.TestCase):
         self.assertEqual(markers[0].file, "src/app.py")
         self.assertEqual(markers[0].heading, f.heading_key)
         self.assertEqual(markers[0].hash, f.hash)
+        self.assertEqual(markers[0].lens, f.lens_key)
 
     def test_quote_with_backticks_gets_a_longer_fence(self):
         body = p.inline_body(finding(quote="s = ```x```"))
