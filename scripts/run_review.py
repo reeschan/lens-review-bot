@@ -181,7 +181,10 @@ def run(
         return fail(exc.stage, str(exc))
     report_tokens(answer.input_tokens, answer.output_tokens, summary_path)
 
-    sorted_findings = triage(answer.findings, review_bundle.file_lines, diff_text, config, bodies)
+    sorted_findings = triage(
+        answer.findings, review_bundle.file_lines, diff_text, config, bodies,
+        review_bundle.rule_files,
+    )
 
     try:
         if current_head_sha(gh, repo, pr_number) != head_sha:

@@ -57,8 +57,9 @@ def sha8(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
 
 
-def run(findings, config=CONFIG, bodies=(), file_lines=FILE_LINES, diff=DIFF):
-    return t.triage(findings, file_lines, diff, config, bodies)
+def run(findings, config=CONFIG, bodies=(), file_lines=FILE_LINES, diff=DIFF,
+        rule_files=("CLAUDE.md",)):
+    return t.triage(findings, file_lines, diff, config, bodies, rule_files)
 
 
 class ShapeTest(unittest.TestCase):
@@ -178,6 +179,14 @@ class LowerBoundTest(unittest.TestCase):
         self.assertEqual(on.below_min_count, 0)
         self.assertEqual(off.inline, [])
         self.assertEqual(off.below_min_count, 1)
+
+    def test_rule_violation_needs_a_bundled_rule_file(self):
+        config = {"min_severity": "major", "post_rule_violations": True}
+        cases = {"docs/spec.md": 1, "": 1, "./CLAUDE.md": 0, " CLAUDE.md ": 0}
+        for source, below in cases.items():
+            with self.subTest(source=source):
+                rv = finding(severity="minor", rule_violation=True, rule_source=source)
+                self.assertEqual(run([rv], config).below_min_count, below)
 
     def test_non_rule_finding_still_bounded_when_enabled(self):
         result = run([finding(severity="minor")],

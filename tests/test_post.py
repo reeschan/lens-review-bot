@@ -174,6 +174,18 @@ class SummaryBodyTests(unittest.TestCase):
         positions = [lines.index(line) for line in expected_sections]
         self.assertEqual(positions, sorted(positions))
 
+    def test_outside_diff_finding_keeps_body_rule_and_quote(self):
+        outside = finding(file="a.py", line=3, heading="外の指摘", body="理由と直し方。",
+                          rule_violation=True, rule_source="CLAUDE.md", quote="x = ```1```")
+        body = p.summary_body(REPO, HEAD, TriageResult(outside_diff=[outside]), bundle())
+        section = body.split("### diff の外の指摘\n")[1].split("\n### ")[0]
+        self.assertIn("— 外の指摘", section)
+        self.assertIn("<details>", section)
+        for part in ("理由と直し方。", "規約: `CLAUDE.md`", "````\n  x = ```1```\n  ````"):
+            with self.subTest(part=part):
+                self.assertIn(part, section)
+        self.assertNotIn("<!-- lens-review:", body)
+
     def test_link_includes_one_line_before_and_after(self):
         self.assertEqual(
             p.file_link(REPO, HEAD, "a.py", 5),
